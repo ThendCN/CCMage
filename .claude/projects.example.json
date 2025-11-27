@@ -1,0 +1,33 @@
+{
+  "projects": {
+    "example-project-1": {
+      "path": "example-project-1",
+      "tech": ["React", "Node.js"],
+      "status": "active",
+      "port": 3000,
+      "description": "示例项目 1 - React全栈应用"
+    },
+    "example-project-2": {
+      "path": "example-project-2",
+      "tech": ["Vue", "Python"],
+      "status": "active",
+      "port": 8080,
+      "description": "示例项目 2 - Vue + Python应用"
+    },
+    "archived-project": {
+      "path": "archived-project",
+      "tech": ["Angular"],
+      "status": "archived",
+      "description": "已归档的项目示例"
+    }
+  },
+  "external": {
+    "external-project-1": {
+      "path": "/absolute/path/to/external/project",
+      "tech": ["Next.js"],
+      "status": "production",
+      "port": 4000,
+      "description": "外部项目示例（使用绝对路径）"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+# AI 历史记录文件（包含用户会话，不应提交）
+ai-history.json
+
+# Node modules
+node_modules/
+
+# 日志文件
+*.log
+npm-debug.log*
+
+# 环境变量
+.env
+.env.local

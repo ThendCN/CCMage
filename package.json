@@ -1,0 +1,16 @@
+{
+  "name": "project-manager",
+  "version": "1.0.0",
+  "description": "项目管理系统 - 图形化管理多个开发项目",
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "dev": "npm run dev:backend & npm run dev:frontend",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "start": "cd backend && npm start"
+  },
+  "keywords": ["project-management", "dashboard"],
+  "author": "",
+  "license": "MIT"
+}
