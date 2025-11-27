@@ -90,3 +90,66 @@ export async function batchOperation(action: 'start' | 'stop' | 'restart', proje
   }
   return response.json();
 }
+
+// 项目配置管理 API
+export async function addProject(name: string, project: any, isExternal: boolean): Promise<any> {
+  const response = await fetch(`${API_BASE}/projects/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project, isExternal })
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || '添加项目失败');
+  }
+  return response.json();
+}
+
+export async function updateProject(name: string, project: any, isExternal: boolean): Promise<any> {
+  const response = await fetch(`${API_BASE}/projects/${name}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project, isExternal })
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || '更新项目失败');
+  }
+  return response.json();
+}
+
+export async function deleteProject(name: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/projects/${name}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || '删除项目失败');
+  }
+  return response.json();
+}
+
+// 文件夹选择 API
+export async function selectFolder(): Promise<{
+  success: boolean;
+  path?: string;
+  message?: string;
+  detected?: {
+    name: string;
+    type: string;
+    stack: string[];
+    description: string;
+    port: number | null;
+    hasGit: boolean;
+  };
+}> {
+  const response = await fetch(`${API_BASE}/select-folder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || '打开文件夹选择器失败');
+  }
+  return response.json();
+}

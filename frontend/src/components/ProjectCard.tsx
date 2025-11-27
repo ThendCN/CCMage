@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Folder, GitBranch, AlertCircle, CheckCircle, Package, ExternalLink, Code, FolderOpen, Play, Square, FileText, Bot } from 'lucide-react';
+import { Folder, GitBranch, AlertCircle, CheckCircle, Package, ExternalLink, Code, FolderOpen, Play, Square, FileText, Bot, Edit2, Trash2 } from 'lucide-react';
 import { Project, ProjectStatus } from '../types';
 import { executeAction, startProject, stopProject, getRunningStatus } from '../api';
 import LogViewer from './LogViewer';
@@ -13,9 +13,11 @@ interface Props {
   selectionMode?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }
 
-export default function ProjectCard({ name, project, status, onAction, selectionMode, isSelected, onSelect }: Props) {
+export default function ProjectCard({ name, project, status, onAction, selectionMode, isSelected, onSelect, onEdit, onDelete }: Props) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [runningStatus, setRunningStatus] = useState<any>(null);
@@ -167,16 +169,61 @@ export default function ProjectCard({ name, project, status, onAction, selection
             {project.description}
           </p>
         </div>
-        <span style={{
-          padding: '4px 12px',
-          borderRadius: '12px',
-          fontSize: '12px',
-          fontWeight: '500',
-          background: `${statusColor}20`,
-          color: statusColor
-        }}>
-          {project.status}
-        </span>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {/* 编辑和删除按钮 */}
+          {!selectionMode && (
+            <>
+              {onEdit && (
+                <button
+                  onClick={onEdit}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    color: '#6b7280',
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                  title="编辑项目"
+                >
+                  <Edit2 size={18} />
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  onClick={() => {
+                    if (window.confirm(`确定要删除项目 "${name}" 吗?`)) {
+                      onDelete();
+                    }
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    color: '#ef4444',
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                  title="删除项目"
+                >
+                  <Trash2 size={18} />
+                </button>
+              )}
+            </>
+          )}
+          <span style={{
+            padding: '4px 12px',
+            borderRadius: '12px',
+            fontSize: '12px',
+            fontWeight: '500',
+            background: `${statusColor}20`,
+            color: statusColor
+          }}>
+            {project.status}
+          </span>
+        </div>
       </div>
 
       {/* 技术栈 */}

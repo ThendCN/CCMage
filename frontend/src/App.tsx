@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { RefreshCw, Folder, Activity, Play, Square, CheckSquare, Square as SquareIcon } from 'lucide-react';
-import { ProjectsConfig, ProjectStatus } from './types';
-import { fetchProjects, fetchBatchStatus, batchOperation } from './api';
+import { RefreshCw, Folder, Activity, Play, Square, CheckSquare, Square as SquareIcon, Plus } from 'lucide-react';
+import { ProjectsConfig, ProjectStatus, Project } from './types';
+import { fetchProjects, fetchBatchStatus, batchOperation, addProject, updateProject, deleteProject } from './api';
 import ProjectCard from './components/ProjectCard';
+import ProjectConfigDialog from './components/ProjectConfigDialog';
 
 export default function App() {
   const [config, setConfig] = useState<ProjectsConfig | null>(null);
@@ -12,6 +13,8 @@ export default function App() {
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [showConfigDialog, setShowConfigDialog] = useState(false);
+  const [editingProject, setEditingProject] = useState<{ name: string; project: Project; isExternal: boolean } | undefined>(undefined);
 
   useEffect(() => {
     loadData();
@@ -65,6 +68,45 @@ export default function App() {
       alert(error instanceof Error ? error.message : '批量操作失败');
     } finally {
       setBatchLoading(false);
+    }
+  };
+
+  const handleSaveProject = async (name: string, project: Project, isExternal: boolean) => {
+    try {
+      if (editingProject) {
+        await updateProject(name, project, isExternal);
+        alert('项目更新成功');
+      } else {
+        await addProject(name, project, isExternal);
+        alert('项目添加成功');
+      }
+      setEditingProject(undefined);
+      await loadData();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '操作失败');
+    }
+  };
+
+  const handleEditProject = (name: string) => {
+    let project = config?.projects[name];
+    let isExternal = false;
+    if (!project && config?.external?.[name]) {
+      project = config.external[name];
+      isExternal = true;
+    }
+    if (project) {
+      setEditingProject({ name, project, isExternal });
+      setShowConfigDialog(true);
+    }
+  };
+
+  const handleDeleteProject = async (name: string) => {
+    try {
+      await deleteProject(name);
+      alert('项目删除成功');
+      await loadData();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '删除失败');
     }
   };
 
@@ -133,6 +175,28 @@ export default function App() {
                 <span>|</span>
                 <span>活跃: {config.meta?.activeProjects || 0} 个</span>
               </div>
+              <button
+                onClick={() => {
+                  setEditingProject(undefined);
+                  setShowConfigDialog(true);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  background: '#3b82f6',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  cursor: 'pointer'
+                }}
+              >
+                <Plus size={16} />
+                添加项目
+              </button>
               <button
                 onClick={() => {
                   setSelectionMode(!selectionMode);
@@ -317,6 +381,8 @@ export default function App() {
                 selectionMode={selectionMode}
                 isSelected={selectedProjects.has(name)}
                 onSelect={() => toggleProjectSelection(name)}
+                onEdit={() => handleEditProject(name)}
+                onDelete={() => handleDeleteProject(name)}
               />
             ))}
           </div>
@@ -333,6 +399,17 @@ export default function App() {
       }}>
         <p>项目管理系统 v1.0.0 | 运行在端口 9999</p>
       </footer>
+
+      {/* 项目配置对话框 */}
+      <ProjectConfigDialog
+        isOpen={showConfigDialog}
+        onClose={() => {
+          setShowConfigDialog(false);
+          setEditingProject(undefined);
+        }}
+        onSave={handleSaveProject}
+        editingProject={editingProject}
+      />
     </div>
   );
 }
