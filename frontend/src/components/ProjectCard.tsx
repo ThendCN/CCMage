@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Folder, GitBranch, AlertCircle, CheckCircle, Package, ExternalLink, Code, FolderOpen, Play, Square, FileText, Bot } from 'lucide-react';
+import { Folder, GitBranch, AlertCircle, CheckCircle, Package, ExternalLink, Code, FolderOpen, Play, Square, FileText, Bot, ListTodo, Search, Database } from 'lucide-react';
 import { Project, ProjectStatus } from '../types';
-import { executeAction, startProject, stopProject, getRunningStatus } from '../api';
+import { executeAction, startProject, stopProject, getRunningStatus, analyzeProject, getProjectAnalysis } from '../api';
 import LogViewer from './LogViewer';
 import AiDialog from './AiDialog';
+import { TodoManager } from './TodoManager';
 
 interface Props {
   name: string;
@@ -23,6 +24,9 @@ export default function ProjectCard({ name, project, status, onAction, selection
   const [isStopping, setIsStopping] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showAi, setShowAi] = useState(false);
+  const [showTodos, setShowTodos] = useState(false);
+  const [analysis, setAnalysis] = useState<any>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // 定时检查运行状态
   useEffect(() => {
@@ -39,6 +43,19 @@ export default function ProjectCard({ name, project, status, onAction, selection
     const interval = setInterval(checkStatus, 3000); // 每3秒检查一次
 
     return () => clearInterval(interval);
+  }, [name]);
+
+  // 获取分析结果
+  useEffect(() => {
+    const fetchAnalysis = async () => {
+      try {
+        const data = await getProjectAnalysis(name);
+        setAnalysis(data);
+      } catch (error) {
+        // 项目尚未分析
+      }
+    };
+    fetchAnalysis();
   }, [name]);
 
   const statusColor = {
@@ -96,6 +113,43 @@ export default function ProjectCard({ name, project, status, onAction, selection
     } finally {
       setIsStopping(false);
       setTimeout(() => setMessage(''), 3000);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    setIsAnalyzing(true);
+    setMessage('');
+    try {
+      await analyzeProject(name);
+      setMessage('项目分析已启动...');
+      // 轮询检查分析结果
+      const checkAnalysis = setInterval(async () => {
+        try {
+          const data = await getProjectAnalysis(name);
+          if (data && data.analysis_status !== 'analyzing') {
+            setAnalysis(data);
+            setIsAnalyzing(false);
+            clearInterval(checkAnalysis);
+            if (data.analysis_status === 'completed') {
+              setMessage('分析完成！');
+            } else {
+              setMessage('分析失败: ' + data.analysis_error);
+            }
+          }
+        } catch (error) {
+          // 继续轮询
+        }
+      }, 2000);
+      // 60秒后超时
+      setTimeout(() => {
+        clearInterval(checkAnalysis);
+        setIsAnalyzing(false);
+      }, 60000);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '分析失败');
+      setIsAnalyzing(false);
+    } finally {
+      setTimeout(() => setMessage(''), 5000);
     }
   };
 
@@ -225,6 +279,26 @@ export default function ProjectCard({ name, project, status, onAction, selection
               color="#3b82f6"
             />
           )}
+          {analysis && analysis.analyzed && (
+            <>
+              {analysis.framework && (
+                <StatusItem
+                  icon={<Database size={16} />}
+                  label="框架"
+                  value={analysis.framework}
+                  color="#8b5cf6"
+                />
+              )}
+              {analysis.file_count > 0 && (
+                <StatusItem
+                  icon={<FileText size={16} />}
+                  label="文件数"
+                  value={analysis.file_count.toString()}
+                  color="#6b7280"
+                />
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -263,6 +337,23 @@ export default function ProjectCard({ name, project, status, onAction, selection
           onClick={() => setShowAi(true)}
           variant="ai"
         />
+
+        <ActionButton
+          icon={<ListTodo size={16} />}
+          label="任务管理"
+          onClick={() => setShowTodos(true)}
+          variant="primary"
+        />
+
+        {!analysis?.analyzed && (
+          <ActionButton
+            icon={<Search size={16} />}
+            label={isAnalyzing ? '分析中...' : '分析项目'}
+            onClick={handleAnalyze}
+            disabled={isAnalyzing}
+            variant="default"
+          />
+        )}
 
         <ActionButton
           icon={<FolderOpen size={16} />}
@@ -313,6 +404,14 @@ export default function ProjectCard({ name, project, status, onAction, selection
         <AiDialog
           projectName={name}
           onClose={() => setShowAi(false)}
+        />
+      )}
+
+      {/* 任务管理器 */}
+      {showTodos && (
+        <TodoManager
+          projectName={name}
+          onClose={() => setShowTodos(false)}
         />
       )}
     </div>

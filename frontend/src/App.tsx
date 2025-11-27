@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { RefreshCw, Folder, Activity, Play, Square, CheckSquare, Square as SquareIcon, Settings as SettingsIcon } from 'lucide-react';
+import { RefreshCw, Folder, Activity, Play, Square, CheckSquare, Square as SquareIcon, Settings as SettingsIcon, Search, Plus } from 'lucide-react';
 import { ProjectsConfig, ProjectStatus } from './types';
-import { fetchProjects, fetchBatchStatus, batchOperation } from './api';
+import { fetchProjects, fetchBatchStatus, batchOperation, analyzeAllProjects, getAnalysisStats } from './api';
 import ProjectCard from './components/ProjectCard';
 import Settings from './components/Settings';
+import ProjectConfigDialog from './components/ProjectConfigDialog';
 
 export default function App() {
   const [config, setConfig] = useState<ProjectsConfig | null>(null);
@@ -14,9 +15,15 @@ export default function App() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisStats, setAnalysisStats] = useState<any>(null);
+  const [showProjectConfig, setShowProjectConfig] = useState(false);
+  const [projectConfigMode, setProjectConfigMode] = useState<'add' | 'edit'>('add');
+  const [editingProject, setEditingProject] = useState<{ name: string; project: any } | null>(null);
 
   useEffect(() => {
     loadData();
+    loadAnalysisStats();
   }, []);
 
   const loadData = async () => {
@@ -40,6 +47,46 @@ export default function App() {
       console.error('加载数据失败:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAnalysisStats = async () => {
+    try {
+      const stats = await getAnalysisStats();
+      setAnalysisStats(stats);
+    } catch (error) {
+      console.error('加载分析统计失败:', error);
+    }
+  };
+
+  const handleAnalyzeAll = async () => {
+    if (!confirm('确定要批量分析所有项目吗？这可能需要一些时间。')) {
+      return;
+    }
+
+    setIsAnalyzing(true);
+    try {
+      await analyzeAllProjects(false);
+      alert('批量分析任务已启动！分析完成后会自动更新项目信息。');
+      // 开始轮询分析状态
+      const pollInterval = setInterval(async () => {
+        const stats = await getAnalysisStats();
+        setAnalysisStats(stats);
+        if (stats.analyzing_count === 0) {
+          clearInterval(pollInterval);
+          setIsAnalyzing(false);
+          alert('批量分析已完成！');
+          await loadData();
+        }
+      }, 5000);
+      // 5分钟后超时
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setIsAnalyzing(false);
+      }, 300000);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '启动批量分析失败');
+      setIsAnalyzing(false);
     }
   };
 
@@ -134,7 +181,62 @@ export default function App() {
                 <span>总计: {config.meta?.totalProjects || 0} 个</span>
                 <span>|</span>
                 <span>活跃: {config.meta?.activeProjects || 0} 个</span>
+                {analysisStats && (
+                  <>
+                    <span>|</span>
+                    <span>已分析: {analysisStats.analyzed_count || 0} 个</span>
+                    {analysisStats.analyzing_count > 0 && (
+                      <span style={{ color: '#f59e0b' }}>
+                        (分析中: {analysisStats.analyzing_count})
+                      </span>
+                    )}
+                  </>
+                )}
               </div>
+              <button
+                onClick={handleAnalyzeAll}
+                disabled={isAnalyzing}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  background: isAnalyzing ? '#9ca3af' : '#8b5cf6',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  cursor: isAnalyzing ? 'not-allowed' : 'pointer',
+                  opacity: isAnalyzing ? 0.7 : 1
+                }}
+              >
+                <Search size={16} />
+                {isAnalyzing ? '分析中...' : '批量分析'}
+              </button>
+              <button
+                onClick={() => {
+                  setProjectConfigMode('add');
+                  setEditingProject(null);
+                  setShowProjectConfig(true);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  background: '#10b981',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  cursor: 'pointer'
+                }}
+              >
+                <Plus size={16} />
+                添加项目
+              </button>
               <button
                 onClick={() => {
                   setSelectionMode(!selectionMode);
@@ -357,6 +459,23 @@ export default function App() {
 
       {/* Settings Modal */}
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+
+      {/* Project Config Dialog */}
+      {showProjectConfig && (
+        <ProjectConfigDialog
+          mode={projectConfigMode}
+          projectName={editingProject?.name}
+          existingProject={editingProject?.project}
+          onClose={() => {
+            setShowProjectConfig(false);
+            setEditingProject(null);
+          }}
+          onSuccess={() => {
+            loadData();
+            loadAnalysisStats();
+          }}
+        />
+      )}
     </div>
   );
 }

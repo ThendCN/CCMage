@@ -28,6 +28,14 @@ lerna-debug.log*
 ai-history.json
 backend/ai-history.json
 
+# Database files
+*.db
+*.db-shm
+*.db-wal
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+
 # User-specific project configuration
 .claude/projects.json
 # But keep the example

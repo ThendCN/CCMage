@@ -5,16 +5,23 @@ const path = require('path');
 const { exec } = require('child_process');
 const util = require('util');
 const { registerProcessRoutes } = require('./routes');
+const { registerManagementRoutes } = require('./managementRoutes');
+const { registerAnalysisRoutes } = require('./analysisRoutes');
 const processManager = require('./processManager');
+const db = require('./database');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const execPromise = util.promisify(exec);
 
 const app = express();
-const PORT = 9999;
+const PORT = process.env.PORT || 9999;
 
-// 项目根目录（backend的上上级目录）
-const PROJECT_ROOT = process.env.PROJECT_ROOT || path.resolve(__dirname, '../..');
+// 项目根目录配置
+// 优先使用环境变量配置的绝对路径，避免相对路径问题
+// 如果未配置，默认使用 backend 的上一级目录（project-manager）
+const PROJECT_ROOT = process.env.PROJECT_ROOT
+  ? path.resolve(process.env.PROJECT_ROOT)
+  : path.resolve(__dirname, '..');
 const PROJECTS_CONFIG = path.join(PROJECT_ROOT, '.claude/projects.json');
 const ENV_FILE = path.resolve(__dirname, '../.env');
 
@@ -296,14 +303,436 @@ async function executeAction(action, projectPath, project, params) {
   }
 }
 
+// ========== 项目 CRUD API ==========
+
+// 添加新项目
+app.post('/api/projects/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const { project, isExternal } = req.body;
+
+    const config = JSON.parse(fs.readFileSync(PROJECTS_CONFIG, 'utf8'));
+
+    // 检查项目是否已存在
+    if (config.projects[name] || (config.external && config.external[name])) {
+      return res.status(400).json({ error: '项目名称已存在' });
+    }
+
+    // 添加到相应的分类
+    if (isExternal) {
+      if (!config.external) config.external = {};
+      config.external[name] = project;
+    } else {
+      config.projects[name] = project;
+    }
+
+    // 更新 active/archived 数组
+    if (project.status === 'active') {
+      if (!config.active) config.active = [];
+      if (!config.active.includes(name)) {
+        config.active.push(name);
+      }
+    } else if (project.status === 'archived') {
+      if (!config.archived) config.archived = [];
+      if (!config.archived.includes(name)) {
+        config.archived.push(name);
+      }
+    }
+
+    // 更新元数据
+    if (config.meta) {
+      config.meta.totalProjects = (config.meta.totalProjects || 0) + 1;
+      if (project.status === 'active') {
+        config.meta.activeProjects = (config.meta.activeProjects || 0) + 1;
+      }
+    }
+
+    fs.writeFileSync(PROJECTS_CONFIG, JSON.stringify(config, null, 2), 'utf8');
+
+    // 同步到数据库
+    db.syncProjectsFromConfig(config);
+
+    // 自动触发项目分析（异步）
+    const projectPath = isExternal ? project.path : path.join(PROJECT_ROOT, project.path);
+    if (fs.existsSync(projectPath)) {
+      setImmediate(async () => {
+        try {
+          console.log(`[ProjectCRUD] 自动分析新项目: ${name}`);
+          db.updateProjectAnalysisStatus(name, 'analyzing');
+          const projectAnalyzer = require('./projectAnalyzer');
+          const analysis = await projectAnalyzer.analyzeProject(name, projectPath);
+          db.saveProjectAnalysis(name, analysis);
+          console.log(`[ProjectCRUD] ✅ 项目分析完成: ${name}`);
+        } catch (error) {
+          console.error(`[ProjectCRUD] ❌ 项目分析失败: ${name}`, error);
+          db.updateProjectAnalysisStatus(name, 'failed', error.message);
+        }
+      });
+    }
+
+    res.json({ success: true, message: '项目添加成功' });
+  } catch (error) {
+    res.status(500).json({ error: '添加项目失败', message: error.message });
+  }
+});
+
+// 更新项目
+app.put('/api/projects/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const { project, isExternal } = req.body;
+
+    const config = JSON.parse(fs.readFileSync(PROJECTS_CONFIG, 'utf8'));
+
+    // 查找项目
+    let oldProject = config.projects[name];
+    let wasExternal = false;
+    if (!oldProject && config.external && config.external[name]) {
+      oldProject = config.external[name];
+      wasExternal = true;
+    }
+
+    if (!oldProject) {
+      return res.status(404).json({ error: '项目不存在' });
+    }
+
+    // 删除旧位置
+    if (wasExternal) {
+      delete config.external[name];
+    } else {
+      delete config.projects[name];
+    }
+
+    // 添加到新位置
+    if (isExternal) {
+      if (!config.external) config.external = {};
+      config.external[name] = project;
+    } else {
+      config.projects[name] = project;
+    }
+
+    // 更新 active/archived 数组
+    if (config.active) {
+      config.active = config.active.filter(n => n !== name);
+    }
+    if (config.archived) {
+      config.archived = config.archived.filter(n => n !== name);
+    }
+
+    if (project.status === 'active') {
+      if (!config.active) config.active = [];
+      config.active.push(name);
+    } else if (project.status === 'archived') {
+      if (!config.archived) config.archived = [];
+      config.archived.push(name);
+    }
+
+    fs.writeFileSync(PROJECTS_CONFIG, JSON.stringify(config, null, 2), 'utf8');
+
+    // 同步到数据库
+    db.syncProjectsFromConfig(config);
+
+    res.json({ success: true, message: '项目更新成功' });
+  } catch (error) {
+    res.status(500).json({ error: '更新项目失败', message: error.message });
+  }
+});
+
+// 删除项目
+app.delete('/api/projects/:name', (req, res) => {
+  try {
+    const { name } = req.params;
+
+    const config = JSON.parse(fs.readFileSync(PROJECTS_CONFIG, 'utf8'));
+
+    // 查找项目
+    let found = false;
+    if (config.projects[name]) {
+      delete config.projects[name];
+      found = true;
+    } else if (config.external && config.external[name]) {
+      delete config.external[name];
+      found = true;
+    }
+
+    if (!found) {
+      return res.status(404).json({ error: '项目不存在' });
+    }
+
+    // 从 active/archived 数组中移除
+    if (config.active) {
+      config.active = config.active.filter(n => n !== name);
+    }
+    if (config.archived) {
+      config.archived = config.archived.filter(n => n !== name);
+    }
+
+    // 更新元数据
+    if (config.meta) {
+      config.meta.totalProjects = Math.max(0, (config.meta.totalProjects || 0) - 1);
+      if (config.active) {
+        config.meta.activeProjects = config.active.length;
+      }
+    }
+
+    fs.writeFileSync(PROJECTS_CONFIG, JSON.stringify(config, null, 2), 'utf8');
+
+    // 同步到数据库
+    db.syncProjectsFromConfig(config);
+
+    res.json({ success: true, message: '项目删除成功' });
+  } catch (error) {
+    res.status(500).json({ error: '删除项目失败', message: error.message });
+  }
+});
+
+// 打开文件夹选择对话框并自动识别项目信息
+app.post('/api/select-folder', async (req, res) => {
+  try {
+    // 使用 osascript (macOS) 或其他系统命令打开文件夹选择器
+    const platform = process.platform;
+    let folderPath = '';
+
+    if (platform === 'darwin') {
+      // macOS - 使用 AppleScript
+      const { stdout } = await execPromise(
+        'osascript -e \'POSIX path of (choose folder with prompt "选择项目文件夹")\''
+      );
+      folderPath = stdout.trim();
+    } else if (platform === 'win32') {
+      // Windows - 使用 PowerShell
+      const psScript = `
+        Add-Type -AssemblyName System.Windows.Forms
+        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dialog.Description = "选择项目文件夹"
+        $result = $dialog.ShowDialog()
+        if ($result -eq 'OK') { Write-Output $dialog.SelectedPath }
+      `;
+      const { stdout } = await execPromise(`powershell -Command "${psScript}"`);
+      folderPath = stdout.trim();
+    } else {
+      // Linux - 尝试使用 zenity
+      const { stdout } = await execPromise('zenity --file-selection --directory --title="选择项目文件夹"');
+      folderPath = stdout.trim();
+    }
+
+    if (!folderPath) {
+      return res.json({ success: false, message: '未选择文件夹' });
+    }
+
+    // 自动识别项目信息
+    const projectInfo = await detectProjectInfo(folderPath);
+
+    res.json({
+      success: true,
+      path: folderPath,
+      detected: projectInfo
+    });
+  } catch (error) {
+    res.status(500).json({ error: '选择文件夹失败', message: error.message });
+  }
+});
+
+// 自动检测项目信息
+async function detectProjectInfo(projectPath) {
+  const info = {
+    name: path.basename(projectPath),
+    type: '',
+    stack: [],
+    description: '',
+    port: null
+  };
+
+  try {
+    // 检测项目类型和技术栈
+    info.stack = await identifyTechStack(projectPath);
+
+    // 读取 README 生成描述
+    const readmeFiles = ['README.md', 'readme.md', 'README', 'README.txt'];
+    for (const readme of readmeFiles) {
+      const readmePath = path.join(projectPath, readme);
+      if (fs.existsSync(readmePath)) {
+        const content = fs.readFileSync(readmePath, 'utf8');
+        // 提取第一段作为描述
+        const lines = content.split('\n').filter(line => line.trim());
+        info.description = lines.slice(0, 3).join(' ').substring(0, 200);
+        break;
+      }
+    }
+
+    // 尝试检测端口
+    const packageJsonPath = path.join(projectPath, 'package.json');
+    if (fs.existsSync(packageJsonPath)) {
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+      // 从 scripts 中查找端口信息
+      const scripts = Object.values(packageJson.scripts || {}).join(' ');
+      const portMatch = scripts.match(/PORT[=:\s]+(\d+)|port[=:\s]+(\d+)|--port[=\s]+(\d+)/i);
+      if (portMatch) {
+        info.port = parseInt(portMatch[1] || portMatch[2] || portMatch[3]);
+      }
+    }
+
+  } catch (error) {
+    console.error('检测项目信息失败:', error);
+  }
+
+  return info;
+}
+
+// 识别技术栈
+async function identifyTechStack(projectPath) {
+  const stack = new Set();
+
+  // 检查文件存在性
+  const files = {
+    'package.json': false,
+    'requirements.txt': false,
+    'Cargo.toml': false,
+    'go.mod': false,
+    'pom.xml': false,
+    'build.gradle': false,
+    'Gemfile': false,
+    'composer.json': false
+  };
+
+  for (const file of Object.keys(files)) {
+    files[file] = fs.existsSync(path.join(projectPath, file));
+  }
+
+  // Node.js / JavaScript / TypeScript
+  if (files['package.json']) {
+    try {
+      const packageJson = JSON.parse(
+        fs.readFileSync(path.join(projectPath, 'package.json'), 'utf8')
+      );
+      const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+
+      // 框架检测
+      if (deps.react || deps['@types/react']) stack.add('React');
+      if (deps.vue || deps['@vue/cli-service']) stack.add('Vue');
+      if (deps['@angular/core']) stack.add('Angular');
+      if (deps.next) stack.add('Next.js');
+      if (deps.nuxt) stack.add('Nuxt.js');
+      if (deps.svelte) stack.add('Svelte');
+
+      // 后端框架
+      if (deps.express) stack.add('Express');
+      if (deps.koa) stack.add('Koa');
+      if (deps['@nestjs/core']) stack.add('NestJS');
+      if (deps.fastify) stack.add('Fastify');
+
+      // 构建工具
+      if (deps.vite) stack.add('Vite');
+      if (deps.webpack) stack.add('Webpack');
+
+      // 其他
+      if (deps.typescript || deps['@types/node']) stack.add('TypeScript');
+      if (deps.electron) stack.add('Electron');
+      if (deps['@tauri-apps/api']) stack.add('Tauri');
+
+      // 如果没有检测到特定框架，标记为 Node.js
+      if (stack.size === 0 || (stack.size === 1 && stack.has('TypeScript'))) {
+        stack.add('Node.js');
+      }
+    } catch (error) {
+      stack.add('Node.js');
+    }
+  }
+
+  // Python
+  if (files['requirements.txt']) {
+    try {
+      const requirements = fs.readFileSync(
+        path.join(projectPath, 'requirements.txt'),
+        'utf8'
+      );
+
+      if (requirements.includes('django')) stack.add('Django');
+      if (requirements.includes('flask')) stack.add('Flask');
+      if (requirements.includes('fastapi')) stack.add('FastAPI');
+      if (requirements.includes('tornado')) stack.add('Tornado');
+
+      if (stack.size === 0) {
+        stack.add('Python');
+      }
+    } catch (error) {
+      stack.add('Python');
+    }
+  }
+
+  // Rust
+  if (files['Cargo.toml']) {
+    stack.add('Rust');
+  }
+
+  // Go
+  if (files['go.mod']) {
+    stack.add('Go');
+  }
+
+  // Java
+  if (files['pom.xml']) {
+    stack.add('Java');
+    stack.add('Maven');
+  }
+  if (files['build.gradle']) {
+    stack.add('Java');
+    stack.add('Gradle');
+  }
+
+  // Ruby
+  if (files['Gemfile']) {
+    stack.add('Ruby');
+    try {
+      const gemfile = fs.readFileSync(path.join(projectPath, 'Gemfile'), 'utf8');
+      if (gemfile.includes('rails')) stack.add('Rails');
+    } catch (error) {
+      // 忽略错误
+    }
+  }
+
+  // PHP
+  if (files['composer.json']) {
+    stack.add('PHP');
+    try {
+      const composer = JSON.parse(
+        fs.readFileSync(path.join(projectPath, 'composer.json'), 'utf8')
+      );
+      if (composer.require && composer.require['laravel/framework']) {
+        stack.add('Laravel');
+      }
+    } catch (error) {
+      // 忽略错误
+    }
+  }
+
+  return Array.from(stack);
+}
+
 // 注册进程管理路由
 registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs);
+
+// 注册项目管理路由（Todos, Milestones, Labels 等）
+registerManagementRoutes(app);
+
+// 注册项目分析路由
+registerAnalysisRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG);
 
 // 启动服务器
 app.listen(PORT, () => {
   console.log(`🚀 项目管理系统后端运行在 http://localhost:${PORT}`);
   console.log(`📁 项目根目录: ${PROJECT_ROOT}`);
   console.log(`📋 配置文件: ${PROJECTS_CONFIG}`);
+  console.log(`💾 数据库: project-manager.db`);
+
+  // 同步项目配置到数据库
+  try {
+    const config = JSON.parse(fs.readFileSync(PROJECTS_CONFIG, 'utf8'));
+    db.syncProjectsFromConfig(config);
+    console.log('✅ 项目配置已同步到数据库');
+  } catch (error) {
+    console.warn('⚠️  同步项目配置失败:', error.message);
+  }
 });
 
 // 优雅关闭
