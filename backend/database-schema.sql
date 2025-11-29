@@ -236,3 +236,79 @@ INSERT OR IGNORE INTO labels (name, color, description) VALUES
 ('documentation', '#8B5CF6', '文档更新'),
 ('urgent', '#F59E0B', '紧急任务'),
 ('blocked', '#6B7280', '被阻塞');
+
+-- ================================================================
+-- AI 增强功能表 (v1.2.0 新增)
+-- ================================================================
+
+-- 8. AI 协作会话表
+CREATE TABLE IF NOT EXISTS ai_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL UNIQUE,      -- AI 会话唯一标识
+  project_name TEXT NOT NULL,
+  todo_id INTEGER,                      -- 关联的 todo（可选）
+  session_type TEXT NOT NULL,           -- decompose/collaborate/verify
+  prompt TEXT NOT NULL,                 -- 用户输入的提示词
+  status TEXT DEFAULT 'running',        -- running/completed/failed/terminated
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME,
+  duration_ms INTEGER,                  -- 执行时长（毫秒）
+  total_cost_usd REAL DEFAULT 0,        -- 费用
+  num_turns INTEGER DEFAULT 0,          -- 轮次
+  result_summary TEXT,                  -- 结果摘要（JSON）
+  error_message TEXT,                   -- 错误信息
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_name) REFERENCES projects(name) ON DELETE CASCADE,
+  FOREIGN KEY (todo_id) REFERENCES todos(id) ON DELETE SET NULL
+);
+
+-- 9. AI 对话消息表
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,             -- 关联会话
+  message_type TEXT NOT NULL,           -- assistant/user/system/result
+  content TEXT NOT NULL,                -- 消息内容
+  metadata TEXT,                        -- 元数据（JSON）如工具调用详情
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (session_id) REFERENCES ai_sessions(session_id) ON DELETE CASCADE
+);
+
+-- 10. AI 任务验证记录表
+CREATE TABLE IF NOT EXISTS ai_verifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  todo_id INTEGER NOT NULL,
+  session_id TEXT NOT NULL,             -- 关联的 AI 会话
+  verification_type TEXT DEFAULT 'automatic', -- automatic/manual
+  result TEXT NOT NULL,                 -- passed/failed/partial
+  confidence REAL,                      -- 置信度 0-1
+  issues_found TEXT,                    -- 发现的问题（JSON 数组）
+  suggestions TEXT,                     -- 改进建议（JSON 数组）
+  evidence TEXT,                        -- 验证证据（JSON）如测试结果、代码检查等
+  verified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  verified_by TEXT DEFAULT 'AI',
+  FOREIGN KEY (todo_id) REFERENCES todos(id) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES ai_sessions(session_id) ON DELETE CASCADE
+);
+
+-- ================================================================
+-- AI 功能索引
+-- ================================================================
+
+CREATE INDEX IF NOT EXISTS idx_ai_sessions_project ON ai_sessions(project_name);
+CREATE INDEX IF NOT EXISTS idx_ai_sessions_todo ON ai_sessions(todo_id);
+CREATE INDEX IF NOT EXISTS idx_ai_sessions_status ON ai_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_ai_sessions_type ON ai_sessions(session_type);
+CREATE INDEX IF NOT EXISTS idx_ai_messages_session ON ai_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_ai_verifications_todo ON ai_verifications(todo_id);
+
+-- ================================================================
+-- AI 功能触发器
+-- ================================================================
+
+-- 自动记录会话完成时间
+CREATE TRIGGER IF NOT EXISTS ai_sessions_completed_trigger
+AFTER UPDATE OF status ON ai_sessions
+WHEN NEW.status IN ('completed', 'failed', 'terminated') AND OLD.status = 'running'
+BEGIN
+  UPDATE ai_sessions SET completed_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;

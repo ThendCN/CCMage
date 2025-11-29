@@ -37,17 +37,43 @@ class ClaudeCodeManager extends EventEmitter {
 
   /**
    * 执行 Claude Code 任务（使用 SDK）
+   * @param {string} sessionId - 如果提供已存在的 sessionId，将复用现有会话继续对话
+   * @param {number} todoId - 可选，关联到特定任务，自动添加任务上下文
    */
-  async execute(projectName, projectPath, prompt, sessionId) {
-    if (!sessionId) {
-      sessionId = `${projectName}-${Date.now()}`;
-    }
-
+  async execute(projectName, projectPath, prompt, sessionId, todoId = null) {
     console.log(`[AI] 🚀 开始执行 AI 任务 (SDK 模式)`);
-    console.log(`[AI]   - sessionId: ${sessionId}`);
+    console.log(`[AI]   - sessionId: ${sessionId || '(新会话)'}`);
     console.log(`[AI]   - projectName: ${projectName}`);
     console.log(`[AI]   - projectPath: ${projectPath}`);
+    console.log(`[AI]   - todoId: ${todoId || '(无关联任务)'}`);
     console.log(`[AI]   - prompt: ${prompt}`);
+
+    // 如果有关联任务，添加任务上下文
+    let finalPrompt = prompt;
+    if (todoId) {
+      try {
+        const todoAiManager = require('./todoAiManager');
+        const taskContext = todoAiManager.generateTaskContext(todoId);
+        finalPrompt = taskContext + '\n\n【用户请求】\n' + prompt;
+        console.log(`[AI] 📋 已添加任务 ${todoId} 的上下文信息`);
+      } catch (error) {
+        console.warn(`[AI] ⚠️ 无法加载任务上下文: ${error.message}`);
+      }
+    }
+
+    // 检查是否是现有会话
+    const existingSession = sessionId ? this.sessions.get(sessionId) : null;
+
+    if (existingSession && existingSession.claude_session_id) {
+      console.log(`[AI] 🔄 复用现有会话 (resume): ${existingSession.claude_session_id}`);
+      // 在现有会话上继续对话
+      return await this.continueConversation(existingSession, finalPrompt, sessionId, projectPath);
+    }
+
+    // 创建新会话
+    if (!sessionId) {
+      sessionId = `claude-code-${projectName}-${Date.now()}`;
+    }
 
     const logs = [];
     const startTime = Date.now();
@@ -60,7 +86,7 @@ class ClaudeCodeManager extends EventEmitter {
       // 创建 query
       console.log('[AI] 📝 创建 query 实例...');
       const queryInstance = sdk.query({
-        prompt: prompt,
+        prompt: finalPrompt,
         options: {
           cwd: projectPath,
           settingSources: ['project', 'user'],
@@ -82,7 +108,10 @@ class ClaudeCodeManager extends EventEmitter {
         logs,
         startTime,
         projectName,
-        prompt
+        projectPath,
+        prompt: finalPrompt,
+        todoId, // 保存关联的任务 ID
+        claude_session_id: null // 将在 init 消息中获取
       });
 
       // 异步处理消息流
@@ -102,11 +131,59 @@ class ClaudeCodeManager extends EventEmitter {
   }
 
   /**
+   * 在现有会话上继续对话
+   */
+  async continueConversation(session, prompt, sessionId, projectPath) {
+    console.log(`[AI] 💬 在现有会话上继续对话 (resume): ${session.claude_session_id}`);
+
+    const startTime = Date.now();
+    session.prompt = prompt; // 更新最新的 prompt
+
+    try {
+      // 加载 SDK
+      const sdk = await this.loadSDK();
+
+      // 使用 resume 选项创建新的 query
+      const queryInstance = sdk.query({
+        prompt: prompt,
+        options: {
+          resume: session.claude_session_id, // 关键：使用 resume 继续会话
+          cwd: projectPath,
+          settingSources: ['project', 'user'],
+          systemPrompt: {
+            type: 'preset',
+            preset: 'claude_code'
+          },
+          env: { ...process.env },
+          maxTurns: 50,
+        }
+      });
+
+      // 更新会话中的 query
+      session.query = queryInstance;
+
+      // 异步处理消息流
+      this.processQueryStream(queryInstance, sessionId, session.logs, startTime, session.projectName, prompt);
+
+      return {
+        sessionId,
+        message: 'AI 任务已启动（继续会话）',
+        startTime
+      };
+    } catch (error) {
+      console.error(`[AI] ❌ 继续对话失败: ${sessionId}`, error);
+      throw error;
+    }
+  }
+
+  /**
    * 处理 query 的消息流
    */
   async processQueryStream(queryInstance, sessionId, logs, startTime, projectName, prompt) {
     try {
       console.log(`[AI] 📡 开始处理消息流: ${sessionId}`);
+      console.log(`[AI] 📋 项目名称: ${projectName}`);
+      console.log(`[AI] ⏱️  开始时间: ${new Date(startTime).toLocaleString()}`);
 
       let messageCount = 0;
       let lastMessageTime = Date.now();
@@ -126,7 +203,14 @@ class ClaudeCodeManager extends EventEmitter {
 
         // 如果消息被过滤（返回 null），跳过
         if (!logEntry) {
-          console.log(`[AI]   - 消息已被过滤（系统配置信息）`);
+          console.log(`[AI]   - 消息已被过滤: ${message.type}/${message.subtype || 'no-subtype'}`);
+          console.log(`[AI]   - 消息概要:`, {
+            type: message.type,
+            subtype: message.subtype,
+            hasContent: !!message.content,
+            hasMessage: !!message.message,
+            keys: Object.keys(message).join(', ')
+          });
           lastMessageTime = currentTime;
           continue;
         }
@@ -168,16 +252,28 @@ class ClaudeCodeManager extends EventEmitter {
         timestamp: startTime,
         success: true,
         logs,
-        duration
+        duration,
+        engine: 'claude-code'
       });
+
+      // 如果关联了任务，保存会话记录
+      const session = this.sessions.get(sessionId);
+      if (session && session.todoId) {
+        try {
+          const todoAiManager = require('./todoAiManager');
+          await todoAiManager.linkSessionToTask(sessionId, session.todoId);
+        } catch (error) {
+          console.warn(`[AI] ⚠️ 关联任务失败: ${error.message}`);
+        }
+      }
 
       // 发送完成事件
       console.log(`[AI] 📡 发送完成事件: ai-complete:${sessionId}`);
       this.emit(`ai-complete:${sessionId}`, result);
 
-      // 清理会话
-      console.log(`[AI] 🧹 清理会话: ${sessionId}`);
-      this.sessions.delete(sessionId);
+      // ⚠️ 注意：不清理会话，保持会话以便继续对话
+      // 用户可以通过 terminateSession 手动终止
+      console.log(`[AI] ✅ 会话保持活跃，可以继续对话: ${sessionId}`);
 
     } catch (error) {
       console.error(`[AI] ❌ 处理消息流出错: ${sessionId}`, error);
@@ -202,14 +298,15 @@ class ClaudeCodeManager extends EventEmitter {
         timestamp: startTime,
         success: false,
         logs,
-        duration
+        duration,
+        engine: 'claude-code'
       });
 
       // 发送完成事件（失败）
       this.emit(`ai-complete:${sessionId}`, result);
 
-      // 清理会话
-      this.sessions.delete(sessionId);
+      // ⚠️ 注意：即使失败也不清理会话，允许用户继续尝试
+      console.log(`[AI] ⚠️ 会话保持活跃（失败），用户可以继续尝试: ${sessionId}`);
     }
   }
 
@@ -217,6 +314,11 @@ class ClaudeCodeManager extends EventEmitter {
    * 将 SDK 消息转换为日志条目（基于官方 SDKMessage 类型）
    */
   messageToLogEntry(message, sessionId) {
+    // 详细日志：打印原始消息（调试用）
+    if (process.env.DEBUG_AI === 'true') {
+      console.log(`[AI-DEBUG] 原始消息:`, JSON.stringify(message, null, 2).substring(0, 500));
+    }
+
     const entry = {
       time: Date.now(),
       sessionId,
@@ -272,20 +374,43 @@ class ClaudeCodeManager extends EventEmitter {
 
       case 'system': {
         // SDKSystemMessage 有多种 subtype
+        console.log(`[AI] 📋 系统消息 subtype: ${message.subtype}`);
+
         if (message.subtype === 'init') {
-          // 初始化消息 - 跳过（包含大量配置信息）
+          // 初始化消息 - 捕获 Claude session_id
+          console.log(`[AI] ⚙️  初始化消息:`, {
+            cwd: message.cwd,
+            settingSources: message.settingSources,
+            hasTools: !!message.tools,
+            toolCount: message.tools ? message.tools.length : 0,
+            claude_session_id: message.session_id
+          });
+
+          // 保存 Claude session_id 到会话中
+          if (message.session_id && sessionId) {
+            const session = this.sessions.get(sessionId);
+            if (session) {
+              session.claude_session_id = message.session_id;
+              console.log(`[AI] 💾 已保存 Claude session_id: ${message.session_id}`);
+            }
+          }
+
           return null;
         } else if (message.subtype === 'status') {
-          // 状态消息 - 跳过
+          // 状态消息 - 记录状态但不发送
+          console.log(`[AI] 📊 状态更新:`, message.status || 'unknown');
           return null;
         } else if (message.subtype === 'compact_boundary') {
           // 压缩边界 - 跳过
+          console.log(`[AI] 🔄 压缩边界消息`);
           return null;
         } else if (message.subtype === 'hook_response') {
-          // Hook 响应 - 跳过
+          // Hook 响应 - 记录响应
+          console.log(`[AI] 🪝 Hook 响应:`, message.response || 'no response');
           return null;
         }
         // 其他系统消息也跳过
+        console.log(`[AI] ⚠️  未知系统消息 subtype:`, message.subtype);
         return null;
       }
 
@@ -405,7 +530,7 @@ class ClaudeCodeManager extends EventEmitter {
   }
 
   /**
-   * 格式化工具执行结果
+   * 格式化工具执行结果（优化后的版本，参考 Codex 风格）
    */
   formatToolResult(result) {
     // result 的格式取决于工具类型
@@ -416,8 +541,9 @@ class ClaudeCodeManager extends EventEmitter {
     // 如果结果是字符串且很长，只显示摘要
     if (typeof result === 'string') {
       const lines = result.split('\n');
-      if (lines.length > 10 || result.length > 500) {
-        return `✅ **执行完成**\n<details>\n<summary>查看结果 (${lines.length} 行)</summary>\n\n\`\`\`\n${lines.slice(0, 5).join('\n')}\n... (${lines.length - 5} 行更多内容)\n\`\`\`\n</details>`;
+      if (lines.length > 10 || result.length > 1000) {
+        // 只显示前3行和后3行
+        return `✅ **执行完成** (${lines.length} 行输出)\n\`\`\`\n${lines.slice(0, 3).join('\n')}\n...\n${lines.slice(-3).join('\n')}\n\`\`\``;
       }
       return `✅ **执行完成**\n\`\`\`\n${result}\n\`\`\``;
     }
@@ -428,17 +554,21 @@ class ClaudeCodeManager extends EventEmitter {
       if (result.type === 'text' && result.file) {
         // 文件读取结果
         const { file } = result;
-        return `✅ **文件已读取**\n- 路径: \`${file.filePath}\`\n- 行数: ${file.numLines}`;
+        return `✅ **文件已读取**\n📄 \`${file.filePath}\` (${file.numLines} 行)`;
       }
 
       if (result.stdout || result.stderr) {
         // 命令执行结果
         const output = result.stdout || result.stderr;
+        const exitCode = result.exitCode !== undefined ? result.exitCode : 0;
+        const status = exitCode === 0 ? '✅' : '❌';
+        const statusText = exitCode === 0 ? '成功' : '失败';
+
         const lines = output.split('\n');
-        if (lines.length > 5) {
-          return `✅ **命令执行完成**\n\`\`\`\n${lines.slice(0, 3).join('\n')}\n...\n\`\`\``;
+        if (lines.length > 10 || output.length > 1000) {
+          return `${status} **命令执行${statusText}** (退出码: ${exitCode})\n\`\`\`\n${lines.slice(0, 3).join('\n')}\n...\n${lines.slice(-3).join('\n')}\n\`\`\``;
         }
-        return `✅ **命令执行完成**\n\`\`\`\n${output}\n\`\`\``;
+        return `${status} **命令执行${statusText}** (退出码: ${exitCode})\n\`\`\`\n${output}\n\`\`\``;
       }
 
       // 其他对象结果

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Send, Loader, StopCircle, Clock, History, Trash2 } from 'lucide-react';
+import { X, Send, Loader, StopCircle, Clock, History, Trash2, Cpu, CheckCircle2, Circle, PlayCircle, PauseCircle } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
+import { getAvailableEngines, executeAI } from '../api';
+import type { AIEngine, AIEngineInfo, Todo } from '../types';
 
 interface LogEntry {
   time: number;
@@ -15,28 +17,115 @@ interface HistoryRecord {
   timestamp: number;
   success: boolean;
   duration: number;
+  engine?: AIEngine;
 }
 
 interface Props {
   projectName: string;
   onClose: () => void;
+  todoId?: number | null;  // 可选：关联的任务 ID
+  initialPrompt?: string;  // 可选：初始提示词
 }
 
-export default function AiDialog({ projectName, onClose }: Props) {
-  const [prompt, setPrompt] = useState('');
+export default function AiDialog({ projectName, onClose, todoId, initialPrompt }: Props) {
+  const [prompt, setPrompt] = useState(initialPrompt || '');
   const [output, setOutput] = useState<LogEntry[]>([]);
   const [isRunning, setIsRunning] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null); // 对话 ID（跨引擎）
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null); // 当前引擎的会话 ID
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [selectedEngine, setSelectedEngine] = useState<AIEngine>('claude-code');
+  const [availableEngines, setAvailableEngines] = useState<AIEngineInfo[]>([]);
+  const [currentTodo, setCurrentTodo] = useState<Todo | null>(null); // 当前关联的任务
   const outputRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
+  // 当 initialPrompt 变化时更新 prompt
+  useEffect(() => {
+    if (initialPrompt) {
+      setPrompt(initialPrompt);
+    }
+  }, [initialPrompt]);
+
+  // 加载关联的任务详情
+  useEffect(() => {
+    if (todoId) {
+      loadTodoDetails();
+    } else {
+      setCurrentTodo(null);
+    }
+  }, [todoId]);
+
+  const loadTodoDetails = async () => {
+    if (!todoId) return;
+    try {
+      const response = await fetch(`/api/todos/${todoId}`);
+      const data = await response.json();
+      if (data.success) {
+        setCurrentTodo(data.data);
+      }
+    } catch (error) {
+      console.error('加载任务详情失败:', error);
+    }
+  };
+
+  const updateTodoStatus = async (newStatus: string) => {
+    if (!todoId) return;
+    try {
+      const response = await fetch(`/api/todos/${todoId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setCurrentTodo(data.data);
+        // 可选: 显示成功提示
+      }
+    } catch (error) {
+      console.error('更新任务状态失败:', error);
+      alert('更新任务状态失败，请重试');
+    }
+  };
+
+  // 加载可用引擎
+  useEffect(() => {
+    loadEngines();
+  }, []);
+
   // 加载历史记录
   useEffect(() => {
     loadHistory();
-  }, [projectName]);
+  }, [projectName, selectedEngine]);
+
+  // 监听引擎切换 - 重新建立 SSE 连接
+  useEffect(() => {
+    if (conversationId && currentSessionId) {
+      // 计算新引擎的 sessionId
+      const newSessionId = `${selectedEngine}-${conversationId}`;
+
+      if (newSessionId !== currentSessionId) {
+        console.log(`[前端] 🔄 引擎切换: ${currentSessionId} -> ${newSessionId}`);
+
+        // 关闭旧的 SSE 连接
+        if (eventSourceRef.current) {
+          console.log('[前端] 关闭旧的 SSE 连接');
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+
+        // 更新 sessionId
+        setCurrentSessionId(newSessionId);
+
+        // 如果有正在运行的任务，重新建立 SSE 连接
+        if (isRunning) {
+          setupSSEConnection(newSessionId);
+        }
+      }
+    }
+  }, [selectedEngine, conversationId]);
 
   // 自动滚动
   useEffect(() => {
@@ -56,9 +145,23 @@ export default function AiDialog({ projectName, onClose }: Props) {
     };
   }, []);
 
+  const loadEngines = async () => {
+    try {
+      const engines = await getAvailableEngines();
+      setAvailableEngines(engines);
+      // 设置默认引擎
+      const defaultEngine = engines.find(e => e.isDefault);
+      if (defaultEngine) {
+        setSelectedEngine(defaultEngine.name);
+      }
+    } catch (error) {
+      console.error('加载引擎列表失败:', error);
+    }
+  };
+
   const loadHistory = async () => {
     try {
-      const response = await fetch(`/api/projects/${projectName}/ai/history`);
+      const response = await fetch(`/api/projects/${projectName}/ai/history?engine=${selectedEngine}`);
       const data = await response.json();
       setHistory(data.history || []);
     } catch (error) {
@@ -66,84 +169,92 @@ export default function AiDialog({ projectName, onClose }: Props) {
     }
   };
 
+  // 建立 SSE 连接
+  const setupSSEConnection = (sessionId: string) => {
+    console.log(`[前端] 📡 建立 SSE 连接: ${sessionId}`);
+
+    // 关闭之前的连接
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    // 连接 SSE 流
+    const eventSource = new EventSource(
+      `/api/projects/${projectName}/ai/stream/${sessionId}`
+    );
+
+    // 跟踪最后一条消息，用于简单去重
+    let lastMessage = '';
+    let messageIndex = 0;
+
+    eventSource.onmessage = (event) => {
+      try {
+        const log = JSON.parse(event.data);
+
+        if (log.type === 'complete') {
+          // 任务完成
+          setIsRunning(false);
+          eventSource.close();
+          loadHistory(); // 刷新历史记录
+          // 自动将焦点回到输入框
+          setTimeout(() => {
+            inputRef.current?.focus();
+          }, 0);
+        } else {
+          // 简单去重：只有当内容与上一条完全相同时才认为是重复
+          const currentMessage = `${log.type}-${log.content}`;
+
+          if (currentMessage !== lastMessage) {
+            messageIndex++;
+            lastMessage = currentMessage;
+            setOutput(prev => [...prev, log]);
+            console.log(`✅ 消息 #${messageIndex}:`, log.content?.substring(0, 50));
+          } else {
+            console.warn(`⚠️ 重复消息已忽略:`, log.content?.substring(0, 50));
+          }
+        }
+      } catch (error) {
+        console.error('解析日志失败:', error);
+      }
+    };
+
+    eventSource.onerror = () => {
+      setIsRunning(false);
+      eventSource.close();
+    };
+
+    eventSourceRef.current = eventSource;
+  };
+
   const handleExecute = async () => {
     if (!prompt.trim() || isRunning) return;
 
     const currentPrompt = prompt.trim();
     setIsRunning(true);
-    setOutput([]);
+    // 不清空输出，保持历史记录（除非是新会话）
+    // setOutput([]);  // 注释掉这行
     setPrompt('');  // 立即清空输入框
 
-    // 关闭之前的 SSE 连接（如果存在）
-    if (eventSourceRef.current) {
-      console.log('关闭之前的 SSE 连接');
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-
     try {
-      // 启动 AI 任务
-      const response = await fetch(`/api/projects/${projectName}/ai`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: currentPrompt })
-      });
+      // 启动 AI 任务，传递 conversationId 和 todoId（如果有）
+      const result = await executeAI(projectName, currentPrompt, selectedEngine, conversationId, todoId || null);
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || '启动失败');
+      // 更新对话 ID 和会话 ID
+      const newConversationId = result.conversationId;
+      const newSessionId = result.sessionId;
+
+      if (!conversationId || newConversationId !== conversationId) {
+        console.log(`[前端] 💾 保存新对话 ID: ${newConversationId}`);
+        setConversationId(newConversationId);
+      } else {
+        console.log(`[前端] 🔄 继续现有对话: ${conversationId}`);
       }
 
-      const result = await response.json();
-      const newSessionId = result.sessionId;
-      setSessionId(newSessionId);
+      setCurrentSessionId(newSessionId);
 
-      // 连接 SSE 流
-      const eventSource = new EventSource(
-        `/api/projects/${projectName}/ai/stream/${newSessionId}`
-      );
-
-      // 跟踪最后一条消息，用于简单去重
-      let lastMessage = '';
-      let messageIndex = 0;
-
-      eventSource.onmessage = (event) => {
-        try {
-          const log = JSON.parse(event.data);
-
-          if (log.type === 'complete') {
-            // 任务完成
-            setIsRunning(false);
-            eventSource.close();
-            loadHistory(); // 刷新历史记录
-            // 自动将焦点回到输入框
-            setTimeout(() => {
-              inputRef.current?.focus();
-            }, 0);
-          } else {
-            // 简单去重：只有当内容与上一条完全相同时才认为是重复
-            const currentMessage = `${log.type}-${log.content}`;
-
-            if (currentMessage !== lastMessage) {
-              messageIndex++;
-              lastMessage = currentMessage;
-              setOutput(prev => [...prev, log]);
-              console.log(`✅ 消息 #${messageIndex}:`, log.content?.substring(0, 50));
-            } else {
-              console.warn(`⚠️ 重复消息已忽略:`, log.content?.substring(0, 50));
-            }
-          }
-        } catch (error) {
-          console.error('解析日志失败:', error);
-        }
-      };
-
-      eventSource.onerror = () => {
-        setIsRunning(false);
-        eventSource.close();
-      };
-
-      eventSourceRef.current = eventSource;
+      // 建立 SSE 连接
+      setupSSEConnection(newSessionId);
 
     } catch (error) {
       alert(error instanceof Error ? error.message : '执行失败');
@@ -153,22 +264,54 @@ export default function AiDialog({ projectName, onClose }: Props) {
   };
 
   const handleTerminate = async () => {
-    if (!sessionId) return;
+    if (!currentSessionId) return;
 
     try {
-      await fetch(`/api/projects/${projectName}/ai/terminate/${sessionId}`, {
+      await fetch(`/api/projects/${projectName}/ai/terminate/${currentSessionId}`, {
         method: 'POST'
       });
 
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+        eventSourceRef.current = null;
       }
 
       setIsRunning(false);
-      setSessionId(null);
+      // 终止后不清空 conversationId，允许继续对话
     } catch (error) {
       console.error('终止失败:', error);
     }
+  };
+
+  const handleNewConversation = async () => {
+    if (isRunning) {
+      if (!confirm('当前有任务正在运行，确定要开始新对话吗？')) {
+        return;
+      }
+      // 终止当前任务
+      if (currentSessionId && eventSourceRef.current) {
+        handleTerminate();
+      }
+    }
+
+    // 清除服务器端的对话上下文
+    if (conversationId) {
+      try {
+        await fetch(`/api/conversations/${conversationId}`, {
+          method: 'DELETE'
+        });
+        console.log(`[前端] ✅ 已清除服务器端对话上下文: ${conversationId}`);
+      } catch (error) {
+        console.error('[前端] 清除对话上下文失败:', error);
+      }
+    }
+
+    // 清空对话和会话
+    setConversationId(null);
+    setCurrentSessionId(null);
+    setOutput([]);
+    setPrompt('');
+    console.log('[前端] 已清空对话，准备开始新对话');
   };
 
   const handleClearHistory = async () => {
@@ -186,18 +329,31 @@ export default function AiDialog({ projectName, onClose }: Props) {
 
   const loadHistoryDetail = async (recordId: string) => {
     try {
-      const response = await fetch(
-        `/api/projects/${projectName}/ai/history/${recordId}`
-      );
-      const record = await response.json();
+      console.log('[前端] 📖 加载历史记录详情');
+      console.log('[前端]   - recordId:', recordId);
+      console.log('[前端]   - engine:', selectedEngine);
 
-      // 只显示历史输出，不填充输入框
-      // setPrompt(record.prompt);  // 移除这行，避免历史记录显示在输入框
+      const response = await fetch(
+        `/api/projects/${projectName}/ai/history/${recordId}?engine=${selectedEngine}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      }
+
+      const record = await response.json();
+      console.log('[前端]   - record:', record);
+      console.log('[前端]   - logs 数量:', record.logs?.length || 0);
+
+      // 显示历史输出
       setPrompt('');  // 清空输入框
       setOutput(record.logs || []);
       setShowHistory(false);
+
+      console.log('[前端] ✅ 历史记录已加载');
     } catch (error) {
-      console.error('加载历史详情失败:', error);
+      console.error('[前端] ❌ 加载历史详情失败:', error);
+      alert('加载历史记录失败: ' + (error instanceof Error ? error.message : '未知错误'));
     }
   };
 
@@ -243,16 +399,87 @@ export default function AiDialog({ projectName, onClose }: Props) {
           alignItems: 'center',
           justifyContent: 'space-between'
         }}>
-          <div>
-            <h2 style={{ fontSize: '20px', fontWeight: '600', margin: '0 0 4px 0' }}>
-              AI 编程助手
-            </h2>
-            <p style={{ fontSize: '14px', color: '#6b7280', margin: 0 }}>
-              项目：{projectName}
-            </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div>
+              <h2 style={{ fontSize: '20px', fontWeight: '600', margin: '0 0 4px 0' }}>
+                AI 编程助手
+              </h2>
+              <p style={{ fontSize: '14px', color: '#6b7280', margin: 0 }}>
+                项目：{projectName}
+                {conversationId && (
+                  <span style={{ marginLeft: '12px', padding: '2px 8px', background: '#dbeafe', color: '#1e40af', borderRadius: '4px', fontSize: '12px' }}>
+                    🔗 对话中
+                  </span>
+                )}
+              </p>
+            </div>
+
+            {/* AI 引擎选择器 */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 12px',
+              background: '#f3f4f6',
+              borderRadius: '8px'
+            }}>
+              <Cpu size={16} color="#6b7280" />
+              <select
+                value={selectedEngine}
+                onChange={(e) => {
+                  const newEngine = e.target.value as AIEngine;
+                  if (conversationId && isRunning) {
+                    if (confirm('切换引擎将中断当前任务，是否继续？')) {
+                      setSelectedEngine(newEngine);
+                    }
+                  } else {
+                    setSelectedEngine(newEngine);
+                  }
+                }}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151',
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+                title={conversationId ? '可以在同一对话中切换引擎' : '选择 AI 引擎'}
+              >
+                {availableEngines.map((engine) => (
+                  <option key={engine.name} value={engine.name}>
+                    {engine.displayName}
+                    {engine.isDefault ? ' (默认)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={handleNewConversation}
+              disabled={isRunning}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 12px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '6px',
+                background: 'white',
+                color: '#374151',
+                fontSize: '14px',
+                cursor: isRunning ? 'not-allowed' : 'pointer',
+                opacity: isRunning ? 0.5 : 1
+              }}
+              title="清空当前对话，开始新会话"
+            >
+              <Send size={16} />
+              新对话
+            </button>
+
             <button
               onClick={() => setShowHistory(!showHistory)}
               style={{
@@ -289,6 +516,174 @@ export default function AiDialog({ projectName, onClose }: Props) {
             </button>
           </div>
         </div>
+
+        {/* 关联任务信息卡片 */}
+        {currentTodo && (
+          <div style={{
+            padding: '16px 24px',
+            background: '#f9fafb',
+            borderBottom: '1px solid #e5e7eb',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px'
+          }}>
+            {/* 任务信息 */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <span style={{ fontSize: '13px', color: '#6b7280', fontWeight: '500' }}>
+                  当前任务：
+                </span>
+                <h3 style={{
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  margin: 0,
+                  color: '#111827',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}>
+                  {currentTodo.title}
+                </h3>
+              </div>
+              {currentTodo.description && (
+                <p style={{
+                  fontSize: '13px',
+                  color: '#6b7280',
+                  margin: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}>
+                  {currentTodo.description}
+                </p>
+              )}
+            </div>
+
+            {/* 状态快捷按钮 */}
+            <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+              {currentTodo.status === 'pending' && (
+                <button
+                  onClick={() => updateTodoStatus('in_progress')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    background: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#2563eb'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = '#3b82f6'}
+                  title="开始这个任务"
+                >
+                  <PlayCircle size={14} />
+                  开始任务
+                </button>
+              )}
+
+              {currentTodo.status === 'in_progress' && (
+                <>
+                  <button
+                    onClick={() => updateTodoStatus('pending')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      background: '#f59e0b',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      cursor: 'pointer',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#d97706'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = '#f59e0b'}
+                    title="暂停任务"
+                  >
+                    <PauseCircle size={14} />
+                    暂停
+                  </button>
+                  <button
+                    onClick={() => updateTodoStatus('completed')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      background: '#10b981',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      cursor: 'pointer',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#059669'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = '#10b981'}
+                    title="标记为已完成"
+                  >
+                    <CheckCircle2 size={14} />
+                    完成
+                  </button>
+                </>
+              )}
+
+              {currentTodo.status === 'completed' && (
+                <button
+                  onClick={() => updateTodoStatus('pending')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    background: '#6b7280',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#4b5563'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = '#6b7280'}
+                  title="重新开启任务"
+                >
+                  <Circle size={14} />
+                  重新开启
+                </button>
+              )}
+
+              {/* 当前状态显示 */}
+              <div style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                fontSize: '13px',
+                fontWeight: '500',
+                ...(currentTodo.status === 'pending' ? { background: '#fef3c7', color: '#92400e' } :
+                   currentTodo.status === 'in_progress' ? { background: '#dbeafe', color: '#1e40af' } :
+                   currentTodo.status === 'completed' ? { background: '#dcfce7', color: '#16a34a' } :
+                   { background: '#f3f4f6', color: '#1f2937' })
+              }}>
+                {currentTodo.status === 'pending' ? '待处理' :
+                 currentTodo.status === 'in_progress' ? '进行中' :
+                 currentTodo.status === 'completed' ? '已完成' :
+                 currentTodo.status === 'cancelled' ? '已取消' : currentTodo.status}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 主体内容 */}
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -375,6 +770,19 @@ export default function AiDialog({ projectName, onClose }: Props) {
                         fontSize: '12px',
                         color: '#9ca3af'
                       }}>
+                        {/* 引擎标识 */}
+                        {record.engine && (
+                          <span style={{
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            background: record.engine === 'claude-code' ? '#dbeafe' : '#fef3c7',
+                            color: record.engine === 'claude-code' ? '#1e40af' : '#92400e',
+                            fontSize: '11px',
+                            fontWeight: '500'
+                          }}>
+                            {record.engine === 'claude-code' ? 'Claude' : 'Codex'}
+                          </span>
+                        )}
                         <span style={{
                           padding: '2px 6px',
                           borderRadius: '4px',

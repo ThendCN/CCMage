@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { RefreshCw, Folder, Activity, Play, Square, CheckSquare, Square as SquareIcon, Settings as SettingsIcon, Search, Plus } from 'lucide-react';
+import { RefreshCw, Folder, Activity, Play, Square, CheckSquare, Square as SquareIcon, Settings as SettingsIcon, Search, Plus, Sparkles } from 'lucide-react';
 import { ProjectsConfig, ProjectStatus } from './types';
 import { fetchProjects, fetchBatchStatus, batchOperation, analyzeAllProjects, getAnalysisStats } from './api';
 import ProjectCard from './components/ProjectCard';
 import Settings from './components/Settings';
 import ProjectConfigDialog from './components/ProjectConfigDialog';
+import ProjectCreationDialog from './components/ProjectCreationDialog';
 import ProjectDetailPage from './components/ProjectDetailPage';
 import { TodoManager } from './components/TodoManager';
 import LogViewer from './components/LogViewer';
@@ -24,6 +25,7 @@ export default function App() {
   const [showProjectConfig, setShowProjectConfig] = useState(false);
   const [projectConfigMode, setProjectConfigMode] = useState<'add' | 'edit'>('add');
   const [editingProject, setEditingProject] = useState<{ name: string; project: any } | null>(null);
+  const [showProjectCreation, setShowProjectCreation] = useState(false);
   const [detailProjectName, setDetailProjectName] = useState<string | null>(null);
   const [showTodoManager, setShowTodoManager] = useState<string | null>(null);
   const [showLogViewer, setShowLogViewer] = useState<string | null>(null);
@@ -203,7 +205,7 @@ export default function App() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <Folder size={28} color="#3b82f6" />
-              <h1 style={{ fontSize: '24px', fontWeight: '600' }}>Claude Code 项目管理系统</h1>
+              <h1 style={{ fontSize: '24px', fontWeight: '600' }}>CCMage</h1>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <div style={{ display: 'flex', gap: '8px', color: '#6b7280', fontSize: '14px' }}>
@@ -244,6 +246,26 @@ export default function App() {
                 {isAnalyzing ? '分析中...' : '批量分析'}
               </button>
               <button
+                onClick={() => setShowProjectCreation(true)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 6px rgba(102, 126, 234, 0.3)'
+                }}
+              >
+                <Sparkles size={16} />
+                AI 创建项目
+              </button>
+              <button
                 onClick={() => {
                   setProjectConfigMode('add');
                   setEditingProject(null);
@@ -264,7 +286,7 @@ export default function App() {
                 }}
               >
                 <Plus size={16} />
-                添加项目
+                手动添加项目
               </button>
               <button
                 onClick={() => {
@@ -467,6 +489,11 @@ export default function App() {
                 status={statuses.get(name)}
                 onAction={loadData}
                 onOpenDetail={(projectName) => setDetailProjectName(projectName)}
+                onEdit={(projectName, projectData) => {
+                  setProjectConfigMode('edit');
+                  setEditingProject({ name: projectName, project: projectData });
+                  setShowProjectConfig(true);
+                }}
                 selectionMode={selectionMode}
                 isSelected={selectedProjects.has(name)}
                 onSelect={() => toggleProjectSelection(name)}
@@ -484,7 +511,7 @@ export default function App() {
         color: '#9ca3af',
         fontSize: '14px'
       }}>
-        <p>Claude Code 项目管理系统 v1.0.0 | 运行在端口 9999</p>
+        <p>CCMage v1.2.0 - 专为 Vibe Coding 开发者打造 | 运行在端口 9999</p>
       </footer>
 
       {/* Settings Modal */}
@@ -500,6 +527,17 @@ export default function App() {
             setShowProjectConfig(false);
             setEditingProject(null);
           }}
+          onSuccess={() => {
+            loadData();
+            loadAnalysisStats();
+          }}
+        />
+      )}
+
+      {/* Project Creation Dialog (AI) */}
+      {showProjectCreation && (
+        <ProjectCreationDialog
+          onClose={() => setShowProjectCreation(false)}
           onSuccess={() => {
             loadData();
             loadAnalysisStats();

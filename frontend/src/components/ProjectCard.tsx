@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Folder, GitBranch, AlertCircle, Package, Code, FolderOpen, Play, Square } from 'lucide-react';
-import { Project, ProjectStatus } from '../types';
-import { executeAction, startProject, stopProject, getRunningStatus } from '../api';
+import { Folder, GitBranch, AlertCircle, Package, Code, FolderOpen, Play, Square, Settings, Brain, Loader } from 'lucide-react';
+import { Project, ProjectStatus, ProjectAnalysis } from '../types';
+import { executeAction, startProject, stopProject, getRunningStatus, analyzeProject, getProjectAnalysis } from '../api';
 
 interface Props {
   name: string;
@@ -9,6 +9,7 @@ interface Props {
   status?: ProjectStatus;
   onAction: () => void;
   onOpenDetail: (projectName: string) => void;
+  onEdit?: (projectName: string, project: Project) => void;
   selectionMode?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
@@ -20,6 +21,7 @@ export default function ProjectCard({
   status,
   onAction,
   onOpenDetail,
+  onEdit,
   selectionMode,
   isSelected,
   onSelect
@@ -28,6 +30,8 @@ export default function ProjectCard({
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [message, setMessage] = useState('');
+  const [analysisData, setAnalysisData] = useState<ProjectAnalysis | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const statusColor = {
     active: '#10b981',
@@ -53,6 +57,36 @@ export default function ProjectCard({
     const interval = setInterval(checkStatus, 3000);
     return () => clearInterval(interval);
   }, [name]);
+
+  // 获取项目分析结果
+  useEffect(() => {
+    const fetchAnalysis = async () => {
+      try {
+        const analysis = await getProjectAnalysis(name);
+        setAnalysisData(analysis);
+
+        // 如果正在分析，继续轮询
+        if (analysis?.analysis_status === 'analyzing') {
+          setIsAnalyzing(true);
+        } else {
+          setIsAnalyzing(false);
+        }
+      } catch (error) {
+        // 忽略错误（项目可能还未分析）
+      }
+    };
+
+    fetchAnalysis();
+
+    // 如果正在分析，每 3 秒刷新一次
+    const interval = setInterval(() => {
+      if (isAnalyzing) {
+        fetchAnalysis();
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [name, isAnalyzing]);
 
   const handleAction = async (action: string) => {
     setMessage('');
@@ -96,6 +130,20 @@ export default function ProjectCard({
       setMessage(error instanceof Error ? error.message : '停止失败');
     } finally {
       setIsStopping(false);
+      setTimeout(() => setMessage(''), 3000);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    setIsAnalyzing(true);
+    setMessage('');
+    try {
+      await analyzeProject(name);
+      setMessage('AI 分析已启动');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '启动分析失败');
+      setIsAnalyzing(false);
+    } finally {
       setTimeout(() => setMessage(''), 3000);
     }
   };
@@ -171,6 +219,36 @@ export default function ProjectCard({
                 <span>运行中</span>
               </div>
             )}
+            {analysisData?.analysis_status === 'analyzing' && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '2px 8px',
+                background: '#dbeafe',
+                borderRadius: '12px',
+                fontSize: '12px',
+                color: '#3b82f6'
+              }}>
+                <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                <span>分析中...</span>
+              </div>
+            )}
+            {analysisData?.analysis_status === 'completed' && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '2px 8px',
+                background: '#f0fdf4',
+                borderRadius: '12px',
+                fontSize: '12px',
+                color: '#16a34a'
+              }}>
+                <Brain size={12} />
+                <span>已分析</span>
+              </div>
+            )}
           </div>
           <p style={{ fontSize: '14px', color: '#6b7280', margin: 0 }}>
             {project.description}
@@ -234,6 +312,21 @@ export default function ProjectCard({
           label="VSCode"
           onClick={() => handleAction('open-vscode')}
         />
+        <QuickButton
+          icon={isAnalyzing ? <Loader size={14} /> : <Brain size={14} />}
+          label={analysisData?.analyzed ? '重新分析' : 'AI分析'}
+          onClick={handleAnalyze}
+          disabled={isAnalyzing}
+          color="#8b5cf6"
+        />
+        {onEdit && (
+          <QuickButton
+            icon={<Settings size={14} />}
+            label="编辑"
+            onClick={() => onEdit(name, project)}
+            color="#3b82f6"
+          />
+        )}
       </div>
 
       {/* 消息提示 */}

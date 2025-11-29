@@ -7,6 +7,8 @@ const util = require('util');
 const { registerProcessRoutes } = require('./routes');
 const { registerManagementRoutes } = require('./managementRoutes');
 const { registerAnalysisRoutes } = require('./analysisRoutes');
+const { registerProjectCreationRoutes } = require('./projectCreationRoutes');
+const { registerTodoAiRoutes } = require('./todoAiRoutes');
 const processManager = require('./processManager');
 const db = require('./database');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
@@ -40,6 +42,9 @@ app.get('/api/config', (req, res) => {
     const config = {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
       ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL || 'https://api.husanai.com',
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+      OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || 'https://api.openai.com',
+      DEFAULT_AI_ENGINE: process.env.DEFAULT_AI_ENGINE || 'claude-code',
       PROJECT_ROOT: process.env.PROJECT_ROOT || ''
     };
     res.json(config);
@@ -51,7 +56,7 @@ app.get('/api/config', (req, res) => {
 // 保存配置
 app.post('/api/config', (req, res) => {
   try {
-    const { ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, PROJECT_ROOT } = req.body;
+    const { ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, OPENAI_API_KEY, OPENAI_BASE_URL, DEFAULT_AI_ENGINE, PROJECT_ROOT } = req.body;
 
     // 读取现有的 .env 文件或创建新的
     let envContent = '';
@@ -80,6 +85,15 @@ app.post('/api/config', (req, res) => {
     if (ANTHROPIC_BASE_URL !== undefined) {
       envMap.set('ANTHROPIC_BASE_URL', ANTHROPIC_BASE_URL);
     }
+    if (OPENAI_API_KEY !== undefined) {
+      envMap.set('OPENAI_API_KEY', OPENAI_API_KEY);
+    }
+    if (OPENAI_BASE_URL !== undefined) {
+      envMap.set('OPENAI_BASE_URL', OPENAI_BASE_URL);
+    }
+    if (DEFAULT_AI_ENGINE !== undefined) {
+      envMap.set('DEFAULT_AI_ENGINE', DEFAULT_AI_ENGINE);
+    }
     if (PROJECT_ROOT !== undefined) {
       envMap.set('PROJECT_ROOT', PROJECT_ROOT);
     }
@@ -92,6 +106,13 @@ app.post('/api/config', (req, res) => {
       '# Claude API Configuration',
       `ANTHROPIC_API_KEY=${envMap.get('ANTHROPIC_API_KEY') || ''}`,
       `ANTHROPIC_BASE_URL=${envMap.get('ANTHROPIC_BASE_URL') || 'https://api.husanai.com'}`,
+      '',
+      '# OpenAI API Configuration',
+      `OPENAI_API_KEY=${envMap.get('OPENAI_API_KEY') || ''}`,
+      `OPENAI_BASE_URL=${envMap.get('OPENAI_BASE_URL') || 'https://api.openai.com'}`,
+      '',
+      '# Default AI Engine',
+      `DEFAULT_AI_ENGINE=${envMap.get('DEFAULT_AI_ENGINE') || 'claude-code'}`,
       '',
       '# Server Configuration',
       `PORT=${envMap.get('PORT') || '9999'}`,
@@ -106,6 +127,9 @@ app.post('/api/config', (req, res) => {
     // 更新环境变量
     process.env.ANTHROPIC_API_KEY = envMap.get('ANTHROPIC_API_KEY') || '';
     process.env.ANTHROPIC_BASE_URL = envMap.get('ANTHROPIC_BASE_URL') || 'https://api.husanai.com';
+    process.env.OPENAI_API_KEY = envMap.get('OPENAI_API_KEY') || '';
+    process.env.OPENAI_BASE_URL = envMap.get('OPENAI_BASE_URL') || 'https://api.openai.com';
+    process.env.DEFAULT_AI_ENGINE = envMap.get('DEFAULT_AI_ENGINE') || 'claude-code';
     process.env.PROJECT_ROOT = envMap.get('PROJECT_ROOT') || '';
 
     res.json({ success: true, message: '配置保存成功' });
@@ -314,6 +338,12 @@ async function executeAction(action, projectPath, project, params) {
   }
 }
 
+// ========== 项目创建 API（必须在 CRUD 之前） ==========
+
+// 注册项目创建路由（AI 一句话创建项目）
+// ⚠️ 重要：必须在 /api/projects/:name 之前注册，避免路由冲突
+registerProjectCreationRoutes(app, PROJECT_ROOT);
+
 // ========== 项目 CRUD API ==========
 
 // 添加新项目
@@ -321,6 +351,18 @@ app.post('/api/projects/:name', async (req, res) => {
   try {
     const { name } = req.params;
     const { project, isExternal } = req.body;
+
+    // 验证参数
+    if (!project) {
+      console.error('[ProjectAPI] 添加项目失败: project 参数为 undefined');
+      console.error('[ProjectAPI] 请求体:', JSON.stringify(req.body, null, 2));
+      return res.status(400).json({ error: '缺少 project 参数' });
+    }
+    if (!project.path || !project.path.trim()) {
+      console.error('[ProjectAPI] 添加项目失败: project.path 为空');
+      console.error('[ProjectAPI] project:', JSON.stringify(project, null, 2));
+      return res.status(400).json({ error: '项目路径不能为空' });
+    }
 
     // 检查项目是否已存在
     const existing = db.getProjectByName(name);
@@ -650,6 +692,9 @@ registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs);
 
 // 注册项目管理路由（Todos, Milestones, Labels 等）
 registerManagementRoutes(app);
+
+// 注册 Todo AI 路由（任务拆分、协作、验证）
+registerTodoAiRoutes(app);
 
 // 注册项目分析路由
 registerAnalysisRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG);

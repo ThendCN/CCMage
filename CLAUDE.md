@@ -22,6 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │   ├── server.js              # Express 主服务器
 │   ├── routes.js              # 进程/AI 路由模块
 │   ├── managementRoutes.js    # 项目管理 API 路由
+│   ├── projectCreationRoutes.js # AI 项目创建路由 (新)
 │   ├── database.js            # SQLite 数据库服务层
 │   ├── database-schema.sql    # 数据库模式定义
 │   ├── processManager.js      # 进程管理 (EventEmitter)
@@ -33,6 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │       │   ├── TodoManager.tsx   # Todo 任务管理
 │       │   ├── ProjectCard.tsx   # 项目卡片
 │       │   ├── AiDialog.tsx      # AI 对话框
+│       │   ├── ProjectCreationDialog.tsx # AI 项目创建对话框 (新)
 │       │   └── LogViewer.tsx     # 日志查看器
 │       ├── App.tsx            # 主应用
 │       ├── api.ts             # API 封装
@@ -41,7 +43,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │   └── projects.json          # 项目列表配置(gitignore)
 └── docs/
     ├── ARCHITECTURE.md         # 详细架构文档
-    └── PROJECT_MANAGEMENT_GUIDE.md  # 项目管理功能指南
+    ├── PROJECT_MANAGEMENT_GUIDE.md  # 项目管理功能指南
+    └── AI_PROJECT_CREATION_GUIDE.md # AI 创建项目指南 (新)
 ```
 
 ### 核心模块职责
@@ -191,6 +194,13 @@ npm start                    # 启动生产服务器
 - `POST /api/projects/:name/ai/terminate/:sessionId` - 终止会话
 - `GET /api/projects/:name/ai/history` - 历史记录
 
+### AI 项目创建 (新功能)
+- `POST /api/projects/create-with-ai` - **一句话创建项目**
+- `GET /api/projects/create/stream/:sessionId` - **SSE 创建进度流**
+- `GET /api/projects/create/status/:sessionId` - 获取创建状态
+
+详见 [AI 项目创建指南](docs/AI_PROJECT_CREATION_GUIDE.md)
+
 ### 错误处理规范
 统一返回格式:
 ```json
@@ -314,5 +324,6 @@ case 'new-action':
 
 ---
 
-**最后更新**: 2025-11-27
-**适用版本**: v1.0.0
+**最后更新**: 2025-11-28
+**适用版本**: v1.1.0
+**新增功能**: ✨ AI 一句话创建项目

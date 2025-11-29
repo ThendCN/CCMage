@@ -1,4 +1,4 @@
-import { X, CheckCircle, FileCode, Package, Code2, BookOpen, Layout, Sparkles, Calendar, Play, Settings, FileText, Check } from 'lucide-react';
+import { X, CheckCircle, FileCode, Package, Code2, BookOpen, Layout, Sparkles, Calendar, Play, Settings, FileText, Check, Server, Terminal, Database } from 'lucide-react';
 import { useState } from 'react';
 
 interface Props {
@@ -305,11 +305,175 @@ export default function AnalysisDialog({ projectName, analysis, onClose, onAppli
           {analysis.dependencies && (() => {
             try {
               const deps = JSON.parse(analysis.dependencies);
-              return (
-                <Section title="主要依赖" icon={<Package size={20} />}>
-                  <DependenciesList dependencies={deps} />
-                </Section>
-              );
+
+              // 检查是否是新格式的依赖数据（包含 runtime、startCommands等）
+              if (deps.runtime || deps.startCommands || deps.environmentVariables || deps.services) {
+                return (
+                  <>
+                    {/* 运行环境 */}
+                    {deps.runtime && (
+                      <Section title="运行环境" icon={<Server size={20} />}>
+                        <InfoGrid>
+                          <InfoItem label="运行时" value={deps.runtime.name} />
+                          <InfoItem label="版本要求" value={deps.runtime.version} />
+                          <InfoItem label="包管理器" value={deps.runtime.packageManager} />
+                        </InfoGrid>
+                        {deps.runtime.systemDependencies && deps.runtime.systemDependencies.length > 0 && (
+                          <div style={{ marginTop: '16px' }}>
+                            <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '8px' }}>系统依赖</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                              {deps.runtime.systemDependencies.map((dep: string, idx: number) => (
+                                <span key={idx} style={{
+                                  padding: '4px 12px',
+                                  background: '#fef3c7',
+                                  color: '#92400e',
+                                  borderRadius: '4px',
+                                  fontSize: '12px'
+                                }}>
+                                  {dep}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </Section>
+                    )}
+
+                    {/* 启动命令 */}
+                    {deps.startCommands && (
+                      <Section title="启动命令" icon={<Terminal size={20} />}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          {deps.startCommands.install && (
+                            <CommandRow label="安装依赖" command={deps.startCommands.install} />
+                          )}
+                          {deps.startCommands.dev && (
+                            <CommandRow label="开发模式" command={deps.startCommands.dev} />
+                          )}
+                          {deps.startCommands.build && (
+                            <CommandRow label="构建项目" command={deps.startCommands.build} />
+                          )}
+                          {deps.startCommands.prod && (
+                            <CommandRow label="生产运行" command={deps.startCommands.prod} />
+                          )}
+                        </div>
+                      </Section>
+                    )}
+
+                    {/* 端口配置 */}
+                    {deps.port && (
+                      <Section title="端口配置" icon={<Server size={20} />}>
+                        <InfoGrid>
+                          <InfoItem label="默认端口" value={deps.port.default?.toString() || 'N/A'} />
+                          {deps.port.envVar && (
+                            <InfoItem label="环境变量" value={deps.port.envVar} />
+                          )}
+                          {deps.port.configFile && (
+                            <InfoItem label="配置文件" value={deps.port.configFile} />
+                          )}
+                        </InfoGrid>
+                      </Section>
+                    )}
+
+                    {/* 环境变量 */}
+                    {deps.environmentVariables && deps.environmentVariables.length > 0 && (
+                      <Section title="环境变量" icon={<Settings size={20} />}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          {deps.environmentVariables.map((env: any, idx: number) => (
+                            <div key={idx} style={{
+                              padding: '12px',
+                              background: '#f9fafb',
+                              borderRadius: '8px',
+                              border: '1px solid #e5e7eb'
+                            }}>
+                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
+                                <span style={{ fontSize: '14px', fontWeight: '600', color: '#111827', fontFamily: 'monospace' }}>
+                                  {env.name}
+                                </span>
+                                {env.required && (
+                                  <span style={{
+                                    padding: '2px 6px',
+                                    background: '#fee2e2',
+                                    color: '#dc2626',
+                                    fontSize: '11px',
+                                    borderRadius: '4px',
+                                    fontWeight: '500'
+                                  }}>
+                                    必需
+                                  </span>
+                                )}
+                              </div>
+                              <p style={{ fontSize: '13px', color: '#6b7280', margin: '4px 0' }}>
+                                {env.description}
+                              </p>
+                              {env.default && (
+                                <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>
+                                  默认值: <code style={{ background: '#e5e7eb', padding: '2px 6px', borderRadius: '3px' }}>
+                                    {env.default}
+                                  </code>
+                                </div>
+                              )}
+                              {env.example && (
+                                <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>
+                                  示例: <code style={{ background: '#e5e7eb', padding: '2px 6px', borderRadius: '3px' }}>
+                                    {env.example}
+                                  </code>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </Section>
+                    )}
+
+                    {/* 服务依赖 */}
+                    {deps.services && deps.services.length > 0 && (
+                      <Section title="服务依赖" icon={<Database size={20} />}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {deps.services.map((service: any, idx: number) => (
+                            <div key={idx} style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '8px 12px',
+                              background: '#f9fafb',
+                              borderRadius: '6px',
+                              border: '1px solid #e5e7eb'
+                            }}>
+                              <span style={{ fontSize: '14px', fontWeight: '500', color: '#111827' }}>
+                                {service.name}
+                              </span>
+                              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                <span style={{ fontSize: '13px', color: '#6b7280' }}>
+                                  端口: {service.port}
+                                </span>
+                                {service.required && (
+                                  <span style={{
+                                    padding: '2px 6px',
+                                    background: '#fee2e2',
+                                    color: '#dc2626',
+                                    fontSize: '11px',
+                                    borderRadius: '4px',
+                                    fontWeight: '500'
+                                  }}>
+                                    必需
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </Section>
+                    )}
+                  </>
+                );
+              } else {
+                // 旧格式依赖数据
+                return (
+                  <Section title="主要依赖" icon={<Package size={20} />}>
+                    <DependenciesList dependencies={deps} />
+                  </Section>
+                );
+              }
             } catch {
               return null;
             }
@@ -576,6 +740,25 @@ function ConfigItem({ label, value, field, applied, onApply, applying }: {
           </>
         )}
       </button>
+    </div>
+  );
+}
+
+function CommandRow({ label, command }: { label: string; command: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>{label}</div>
+      <code style={{
+        display: 'block',
+        padding: '8px 12px',
+        background: '#1f2937',
+        color: '#10b981',
+        borderRadius: '6px',
+        fontSize: '13px',
+        fontFamily: 'Monaco, Consolas, monospace'
+      }}>
+        {command}
+      </code>
     </div>
   );
 }

@@ -1,9 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, RefreshCw, ExternalLink, Info, Download, FolderOpen } from 'lucide-react';
+import { Settings as SettingsIcon, Save, RefreshCw, ExternalLink, Info, Download, FolderOpen, Cpu, CheckCircle, XCircle } from 'lucide-react';
+import { getAvailableEngines, checkEngineAvailable } from '../api';
+import type { AIEngine, AIEngineInfo } from '../types';
 
 interface AppConfig {
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_BASE_URL: string;
+  OPENAI_API_KEY: string;
+  OPENAI_BASE_URL: string;
+  DEFAULT_AI_ENGINE: AIEngine;
   PROJECT_ROOT: string;
 }
 
@@ -11,6 +16,9 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [config, setConfig] = useState<AppConfig>({
     ANTHROPIC_API_KEY: '',
     ANTHROPIC_BASE_URL: 'https://api.husanai.com',
+    OPENAI_API_KEY: '',
+    OPENAI_BASE_URL: 'https://api.openai.com',
+    DEFAULT_AI_ENGINE: 'claude-code',
     PROJECT_ROOT: ''
   });
   const [loading, setLoading] = useState(true);
@@ -18,10 +26,34 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [exporting, setExporting] = useState(false);
   const [selectingFolder, setSelectingFolder] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [availableEngines, setAvailableEngines] = useState<AIEngineInfo[]>([]);
+  const [engineStatus, setEngineStatus] = useState<Record<string, boolean>>({});
+  const [checkingEngines, setCheckingEngines] = useState(false);
 
   useEffect(() => {
     loadConfig();
+    loadEngines();
   }, []);
+
+  const loadEngines = async () => {
+    try {
+      const engines = await getAvailableEngines();
+      setAvailableEngines(engines);
+    } catch (error) {
+      console.error('加载引擎列表失败:', error);
+    }
+  };
+
+  const checkAllEngines = async () => {
+    setCheckingEngines(true);
+    const status: Record<string, boolean> = {};
+    for (const engine of availableEngines) {
+      const available = await checkEngineAvailable(engine.name);
+      status[engine.name] = available;
+    }
+    setEngineStatus(status);
+    setCheckingEngines(false);
+  };
 
   const loadConfig = async () => {
     setLoading(true);
@@ -215,10 +247,10 @@ export default function Settings({ onClose }: { onClose: () => void }) {
             <Info size={20} color="#3b82f6" style={{ flexShrink: 0, marginTop: '2px' }} />
             <div style={{ fontSize: '14px', color: '#1e40af', lineHeight: '1.6' }}>
               <p style={{ margin: '0 0 8px 0', fontWeight: '600' }}>
-                🎯 Claude Code 项目管理系统
+                🎯 CCMage - 专为 Vibe Coding 开发者打造
               </p>
               <p style={{ margin: '0 0 8px 0' }}>
-                本系统专为使用 <strong>Claude Code</strong> 开发多个本地项目的开发者设计，帮助你高效管理项目状态、依赖和进程。
+                CCMage 帮助你高效管理多个本地项目，提供项目状态监控、进程管理和 AI 辅助功能。
               </p>
               <p style={{ margin: 0 }}>
                 配置 API Key 后，可以使用 AI 辅助功能（可选）。
@@ -314,6 +346,204 @@ export default function Settings({ onClose }: { onClose: () => void }) {
               </div>
             </div>
 
+            {/* OPENAI_API_KEY */}
+            <div>
+              <label style={{
+                display: 'block',
+                marginBottom: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                color: '#374151'
+              }}>
+                OpenAI API Key (可选)
+              </label>
+              <input
+                type="password"
+                value={config.OPENAI_API_KEY}
+                onChange={(e) => handleChange('OPENAI_API_KEY', e.target.value)}
+                placeholder="sk-..."
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontFamily: 'monospace'
+                }}
+              />
+              <div style={{
+                marginTop: '8px',
+                fontSize: '13px',
+                color: '#6b7280'
+              }}>
+                用于 Codex AI 引擎（可选）
+              </div>
+            </div>
+
+            {/* OPENAI_BASE_URL */}
+            <div>
+              <label style={{
+                display: 'block',
+                marginBottom: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                color: '#374151'
+              }}>
+                OpenAI API 基础地址
+              </label>
+              <input
+                type="text"
+                value={config.OPENAI_BASE_URL}
+                onChange={(e) => handleChange('OPENAI_BASE_URL', e.target.value)}
+                placeholder="https://api.openai.com"
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontFamily: 'monospace'
+                }}
+              />
+              <div style={{
+                marginTop: '8px',
+                fontSize: '13px',
+                color: '#6b7280'
+              }}>
+                OpenAI API 的基础 URL
+              </div>
+            </div>
+
+            {/* DEFAULT_AI_ENGINE */}
+            <div>
+              <label style={{
+                display: 'block',
+                marginBottom: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                color: '#374151'
+              }}>
+                默认 AI 引擎
+              </label>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <div style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 12px',
+                  background: '#f9fafb',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '6px'
+                }}>
+                  <Cpu size={16} color="#6b7280" />
+                  <select
+                    value={config.DEFAULT_AI_ENGINE}
+                    onChange={(e) => handleChange('DEFAULT_AI_ENGINE', e.target.value as AIEngine)}
+                    style={{
+                      flex: 1,
+                      border: 'none',
+                      background: 'transparent',
+                      fontSize: '14px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                  >
+                    {availableEngines.map((engine) => (
+                      <option key={engine.name} value={engine.name}>
+                        {engine.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={checkAllEngines}
+                  disabled={checkingEngines}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '10px 16px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    background: checkingEngines ? '#9ca3af' : '#10b981',
+                    color: 'white',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    cursor: checkingEngines ? 'not-allowed' : 'pointer',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {checkingEngines ? (
+                    <>
+                      <RefreshCw size={16} className="animate-spin" />
+                      检查中...
+                    </>
+                  ) : (
+                    <>
+                      <Cpu size={16} />
+                      检查引擎
+                    </>
+                  )}
+                </button>
+              </div>
+              <div style={{
+                marginTop: '8px',
+                fontSize: '13px',
+                color: '#6b7280'
+              }}>
+                选择默认使用的 AI 引擎
+              </div>
+
+              {/* Engine Status Display */}
+              {Object.keys(engineStatus).length > 0 && (
+                <div style={{
+                  marginTop: '12px',
+                  padding: '12px',
+                  background: '#f9fafb',
+                  borderRadius: '6px',
+                  border: '1px solid #e5e7eb'
+                }}>
+                  <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '8px', color: '#374151' }}>
+                    引擎状态
+                  </div>
+                  {availableEngines.map((engine) => (
+                    <div
+                      key={engine.name}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '6px 0',
+                        fontSize: '13px'
+                      }}
+                    >
+                      {engineStatus[engine.name] ? (
+                        <CheckCircle size={16} color="#10b981" />
+                      ) : (
+                        <XCircle size={16} color="#ef4444" />
+                      )}
+                      <span style={{ color: '#374151' }}>{engine.displayName}</span>
+                      <span style={{
+                        marginLeft: 'auto',
+                        color: engineStatus[engine.name] ? '#10b981' : '#ef4444',
+                        fontWeight: '500'
+                      }}>
+                        {engineStatus[engine.name] ? '可用' : '不可用'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* PROJECT_ROOT */}
             <div>
               <label style={{
@@ -368,7 +598,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
                 fontSize: '13px',
                 color: '#6b7280'
               }}>
-                Claude Code 项目的根目录路径，留空则使用默认路径（当前目录的上两级）
+                项目的根目录路径，留空则使用默认路径（当前目录的上两级）
               </div>
             </div>
           </div>

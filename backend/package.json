@@ -1,6 +1,6 @@
 {
   "name": "ccmage-backend",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "CCMage 后端 API - Vibe Coding 项目管理系统的后端服务",
   "main": "server.js",
   "scripts": {
@@ -15,6 +15,7 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.55",
+    "@openai/codex-sdk": "^0.63.0",
     "better-sqlite3": "^12.4.6",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",

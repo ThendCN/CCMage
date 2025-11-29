@@ -184,30 +184,121 @@ class ProjectAnalyzer {
    * 构建 AI 分析提示词
    */
   buildAnalysisPrompt(projectName, staticAnalysis) {
-    return `请分析这个项目并提供以下信息：
+    return `请深入分析项目 "${projectName}" 的运行环境、启动配置和架构特征。
 
-项目名称: ${projectName}
-框架: ${staticAnalysis.framework || '未知'}
-语言: ${staticAnalysis.languages.join(', ')}
-文件数: ${staticAnalysis.file_count}
-代码行数: ${staticAnalysis.loc}
+## 当前已检测到的信息
 
-请提供：
-1. **架构说明**：简要描述项目的整体架构和技术栈（50-100字）
-2. **主要功能**：列出项目的3-5个核心功能（每个功能用一句话描述）
+- **框架**: ${staticAnalysis.framework || '未知'}
+- **语言**: ${staticAnalysis.languages.join(', ') || '未知'}
+- **文件数**: ${staticAnalysis.file_count}
+- **代码行数**: ${staticAnalysis.loc}
+- **检测到的启动命令**: ${staticAnalysis.start_command || '未检测到'}
+- **检测到的端口**: ${staticAnalysis.port || '未检测到'}
+- **环境文件**: ${staticAnalysis.environment_files?.join(', ') || '无'}
+- **配置文件**: ${staticAnalysis.config_files?.join(', ') || '无'}
 
-请用以下 JSON 格式回复（直接返回 JSON，不要其他文字）：
+## 分析任务
+
+请验证并补充以下信息：
+
+### 1. 运行环境要求
+- **运行时版本**: 读取 package.json 的 "engines" 字段、.nvmrc、.python-version 等，确定 Node.js/Python/其他运行时的版本要求
+- **包管理工具**: 检测是使用 npm/yarn/pnpm (查看 package-lock.json/yarn.lock/pnpm-lock.yaml)
+- **系统依赖**: 是否需要安装额外的系统工具（如 Python、Redis、PostgreSQL 等）
+
+### 2. 启动命令验证
+- **开发命令**: 验证静态分析检测到的启动命令是否正确，从 package.json scripts、README.md 中确认
+- **生产命令**: 查找生产环境的启动方式（npm start、pm2、docker 等）
+- **构建命令**: 如果是需要编译的项目，找出构建命令（npm run build 等）
+- **安装命令**: 确认依赖安装命令（npm install、pip install -r requirements.txt 等）
+
+### 3. 环境变量分析
+- **必需变量**: 从 .env.example、README.md、配置文件中提取必需的环境变量
+- **可选变量**: 提取可选的环境变量
+- **默认值**: 标注哪些变量有默认值
+
+### 4. 端口和服务配置
+- **默认端口**: 验证并确认项目的默认监听端口
+- **端口配置方式**: 如何自定义端口（环境变量名、配置文件位置）
+- **其他服务**: 是否依赖其他服务（数据库、Redis、消息队列等）及其默认端口
+
+### 5. 架构和功能
+- **架构说明**: 简要描述项目的整体架构（如：前后端分离的全栈应用、微服务、单体应用等）
+- **技术栈**: 列出核心技术和工具
+- **主要功能**: 列出3-5个核心功能特性
+- **项目描述**: 用1-2句话概括项目的用途
+
+## 输出格式要求
+
+**重要：请严格按照以下 JSON 格式输出，不要包含任何 markdown 标记之外的文字。**
+
 \`\`\`json
 {
-  "architecture_notes": "架构说明...",
-  "main_features": ["功能1", "功能2", "功能3"]
+  "runtime": {
+    "name": "Node.js",
+    "version": ">=18.0.0",
+    "packageManager": "npm",
+    "systemDependencies": ["Python 3.x", "PostgreSQL 14+"]
+  },
+  "startCommands": {
+    "install": "npm install",
+    "dev": "npm run dev",
+    "build": "npm run build",
+    "prod": "npm start"
+  },
+  "port": {
+    "default": 3000,
+    "envVar": "PORT",
+    "configFile": "config/server.js"
+  },
+  "environmentVariables": [
+    {
+      "name": "DATABASE_URL",
+      "required": true,
+      "description": "数据库连接字符串",
+      "default": null,
+      "example": "postgresql://user:pass@localhost:5432/db"
+    },
+    {
+      "name": "API_KEY",
+      "required": false,
+      "description": "第三方 API 密钥",
+      "default": "demo_key"
+    }
+  ],
+  "services": [
+    {
+      "name": "PostgreSQL",
+      "port": 5432,
+      "required": true
+    },
+    {
+      "name": "Redis",
+      "port": 6379,
+      "required": false
+    }
+  ],
+  "architecture_notes": "这是一个前后端分离的全栈应用，前端使用 React + Vite，后端使用 Express + PostgreSQL，支持 RESTful API 和实时通信。",
+  "main_features": [
+    "用户认证和权限管理",
+    "实时数据同步",
+    "文件上传和管理",
+    "报表生成和导出"
+  ],
+  "description": "企业级项目管理系统，提供任务跟踪、团队协作和数据分析功能。",
+  "techStack": ["React", "Vite", "Express", "PostgreSQL", "Socket.io"]
 }
 \`\`\`
 
-注意：
-- 只分析代码结构，不要运行任何命令
-- 聚焦于项目的核心特征
-- 保持简洁和准确`;
+## 注意事项
+
+1. **务必读取实际文件**：不要猜测，请读取 package.json、README.md、.env.example 等文件
+2. **验证启动命令**：确保启动命令准确无误
+3. **环境变量完整性**：尽可能提取所有环境变量及其说明
+4. **简洁准确**：所有描述保持简洁但准确
+5. **只返回 JSON**：不要在 JSON 代码块之外添加任何文字
+
+现在请开始分析项目。`;
   }
 
   /**
@@ -219,22 +310,55 @@ class ProjectAnalyzer {
       const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
       if (jsonMatch) {
         const data = JSON.parse(jsonMatch[1]);
-        return {
+
+        // 转换为数据库格式
+        const result = {
           architecture_notes: data.architecture_notes || '暂无架构说明',
-          main_features: Array.isArray(data.main_features) ? data.main_features : []
+          main_features: Array.isArray(data.main_features)
+            ? JSON.stringify(data.main_features)
+            : JSON.stringify([]),
+          description: data.description || null,
+          tech: data.techStack ? JSON.stringify(data.techStack) : null,
+          framework: data.runtime?.name || null,
+          languages: data.techStack ? JSON.stringify(data.techStack.filter(t =>
+            ['JavaScript', 'TypeScript', 'Python', 'Go', 'Rust', 'Java'].includes(t)
+          )) : null
         };
+
+        // 保存启动命令（优先使用 dev）
+        if (data.startCommands) {
+          result.start_command = data.startCommands.dev || data.startCommands.prod || null;
+        }
+
+        // 保存端口信息
+        if (data.port && data.port.default) {
+          result.port = data.port.default;
+        }
+
+        // 保存完整的分析数据到 dependencies 字段（JSON）
+        result.dependencies = JSON.stringify({
+          runtime: data.runtime || {},
+          startCommands: data.startCommands || {},
+          port: data.port || {},
+          environmentVariables: data.environmentVariables || [],
+          services: data.services || []
+        });
+
+        console.log('[ProjectAnalyzer] ✅ 成功解析 AI 响应');
+        return result;
       }
 
       // 如果没有 JSON，尝试解析纯文本
+      console.warn('[ProjectAnalyzer] ⚠️  未找到 JSON 格式，使用降级方案');
       return {
         architecture_notes: response.substring(0, 500) || '暂无架构说明',
-        main_features: []
+        main_features: JSON.stringify([])
       };
     } catch (error) {
       console.error('[ProjectAnalyzer] ⚠️  解析 AI 响应失败:', error);
       return {
-        architecture_notes: '暂无架构说明',
-        main_features: []
+        architecture_notes: '暂无架构说明（解析失败）',
+        main_features: JSON.stringify([])
       };
     }
   }

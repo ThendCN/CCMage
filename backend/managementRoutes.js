@@ -493,6 +493,107 @@ function registerManagementRoutes(app) {
       res.status(500).json({ error: '获取活动日志失败', message: error.message });
     }
   });
+
+  // ========== 项目分析 API ==========
+
+  /**
+   * 启动项目AI分析
+   * POST /api/projects/:name/analyze
+   */
+  app.post('/api/projects/:name/analyze', async (req, res) => {
+    try {
+      const { name } = req.params;
+      const project = db.getProjectByName(name);
+
+      if (!project) {
+        return res.status(404).json({ error: '项目不存在' });
+      }
+
+      const path = require('path');
+      const PROJECT_ROOT = process.env.PROJECT_ROOT || path.join(__dirname, '..', '..');
+
+      const projectPath = path.isAbsolute(project.path)
+        ? project.path
+        : path.join(PROJECT_ROOT, project.path);
+
+      // 更新分析状态为"分析中"
+      db.updateProjectAnalysisStatus(name, 'analyzing', null);
+
+      // 异步执行分析（不阻塞响应）
+      const projectAnalyzer = require('./projectAnalyzer');
+      projectAnalyzer.analyzeProject(name, projectPath)
+        .then(result => {
+          // 更新分析结果到数据库
+          db.saveProjectAnalysis(name, result);
+
+          // 记录活动日志
+          db.logActivity({
+            project_name: name,
+            action: 'project_analyzed',
+            entity_type: 'project',
+            entity_id: project.id,
+            details: {
+              framework: result.framework,
+              analyzed_at: result.analyzed_at
+            }
+          });
+
+          console.log(`[API] ✅ 项目分析完成: ${name}`);
+        })
+        .catch(error => {
+          console.error(`[API] ❌ 项目分析失败: ${name}`, error);
+          db.updateProjectAnalysisStatus(name, 'failed', error.message);
+        });
+
+      res.json({
+        success: true,
+        message: '项目分析已启动',
+        projectName: name
+      });
+    } catch (error) {
+      console.error('启动项目分析失败:', error);
+      res.status(500).json({ error: '启动项目分析失败', message: error.message });
+    }
+  });
+
+  /**
+   * 获取项目分析结果
+   * GET /api/projects/:name/analysis
+   */
+  app.get('/api/projects/:name/analysis', (req, res) => {
+    try {
+      const { name } = req.params;
+      const project = db.getProjectByName(name);
+
+      if (!project) {
+        return res.status(404).json({ error: '项目不存在' });
+      }
+
+      // 解析 JSON 字段
+      const analysis = {
+        analyzed: Boolean(project.analyzed),
+        analyzed_at: project.analyzed_at,
+        analysis_status: project.analysis_status,
+        analysis_error: project.analysis_error,
+        framework: project.framework,
+        languages: project.languages ? JSON.parse(project.languages) : [],
+        tech: project.tech ? JSON.parse(project.tech) : [],
+        dependencies: project.dependencies ? JSON.parse(project.dependencies) : {},
+        start_command: project.start_command,
+        port: project.port,
+        description: project.description,
+        architecture_notes: project.architecture_notes,
+        main_features: project.main_features ? JSON.parse(project.main_features) : [],
+        file_count: project.file_count,
+        loc: project.loc
+      };
+
+      res.json({ success: true, data: analysis });
+    } catch (error) {
+      console.error('获取项目分析结果失败:', error);
+      res.status(500).json({ error: '获取项目分析结果失败', message: error.message });
+    }
+  });
 }
 
 module.exports = { registerManagementRoutes };

@@ -147,3 +147,143 @@ export interface ActivityLog {
   details: any;
   created_at: string;
 }
+
+// ========== 项目分析类型 ==========
+
+export interface ProjectAnalysis {
+  analyzed: boolean;
+  analyzed_at?: string;
+  analysis_status: 'pending' | 'analyzing' | 'completed' | 'failed';
+  analysis_error?: string;
+  framework?: string;
+  languages: string[];
+  tech: string[];
+  dependencies: {
+    runtime?: {
+      name: string;
+      version: string;
+      packageManager: string;
+      systemDependencies?: string[];
+    };
+    startCommands?: {
+      install?: string;
+      dev?: string;
+      build?: string;
+      prod?: string;
+    };
+    port?: {
+      default: number;
+      envVar?: string;
+      configFile?: string;
+    };
+    environmentVariables?: Array<{
+      name: string;
+      required: boolean;
+      description: string;
+      default?: string;
+      example?: string;
+    }>;
+    services?: Array<{
+      name: string;
+      port: number;
+      required: boolean;
+    }>;
+  };
+  start_command?: string;
+  port?: number;
+  description?: string;
+  architecture_notes?: string;
+  main_features: string[];
+  file_count?: number;
+  loc?: number;
+}
+
+// ========== AI 引擎类型 ==========
+
+export type AIEngine = 'claude-code' | 'codex';
+
+export interface AIEngineInfo {
+  name: AIEngine;
+  displayName: string;
+  isDefault: boolean;
+}
+
+export interface AISessionInfo {
+  sessionId: string;
+  projectName?: string;
+  prompt: string;
+  engine: AIEngine;
+  startTime?: number;
+  message?: string;
+  streamUrl?: string;
+}
+
+// ========== AI 任务增强类型 (v1.2.0 新增) ==========
+
+export interface AiSession {
+  id: number;
+  session_id: string;
+  project_name: string;
+  todo_id?: number;
+  session_type: 'decompose' | 'collaborate' | 'verify';
+  prompt: string;
+  status: 'running' | 'completed' | 'failed' | 'terminated';
+  started_at: string;
+  completed_at?: string;
+  duration_ms?: number;
+  total_cost_usd?: number;
+  num_turns?: number;
+  result_summary?: any;
+  error_message?: string;
+  created_at: string;
+}
+
+export interface AiMessage {
+  id: number;
+  session_id: string;
+  message_type: 'assistant' | 'user' | 'system' | 'result';
+  content: string;
+  metadata?: any;
+  timestamp: string;
+}
+
+export interface AiVerification {
+  id: number;
+  todo_id: number;
+  session_id: string;
+  verification_type: 'automatic' | 'manual';
+  result: 'passed' | 'failed' | 'partial';
+  confidence?: number;
+  issues_found?: string[];
+  suggestions?: string[];
+  evidence?: {
+    tests_passed?: boolean;
+    code_quality?: string;
+    coverage?: number;
+    [key: string]: any;
+  };
+  verified_at: string;
+  verified_by: string;
+}
+
+export interface TaskDecomposeResult {
+  mainTask: {
+    title: string;
+    description: string;
+    estimated_hours?: number;
+    priority: 'low' | 'medium' | 'high' | 'urgent';
+  };
+  subtasks: Array<{
+    title: string;
+    description: string;
+    estimated_hours?: number;
+    priority: 'low' | 'medium' | 'high' | 'urgent';
+    order: number;
+  }>;
+}
+
+export interface TodoWithSubtasks extends Todo {
+  subtasks?: Todo[];
+  verification?: AiVerification;
+  aiSessions?: AiSession[];
+}

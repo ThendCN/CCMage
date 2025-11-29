@@ -341,10 +341,14 @@ class DatabaseManager {
           analysis_status = ?,
           framework = ?,
           languages = ?,
+          tech = ?,
           dependencies = ?,
           file_count = ?,
           loc = ?,
           readme_summary = ?,
+          start_command = ?,
+          port = ?,
+          description = ?,
           architecture_notes = ?,
           main_features = ?,
           analysis_error = ?,
@@ -357,13 +361,17 @@ class DatabaseManager {
       analysisData.analyzed_at || null,
       analysisData.analysis_status || 'completed',
       analysisData.framework || null,
-      JSON.stringify(analysisData.languages || []),
-      JSON.stringify(analysisData.dependencies || {}),
+      analysisData.languages || null,
+      analysisData.tech || null,
+      analysisData.dependencies || null,
       analysisData.file_count || 0,
       analysisData.loc || 0,
       analysisData.readme_summary || null,
+      analysisData.start_command || null,
+      analysisData.port || null,
+      analysisData.description || null,
       analysisData.architecture_notes || null,
-      JSON.stringify(analysisData.main_features || []),
+      analysisData.main_features || null,
       analysisData.analysis_error || null,
       projectName
     );
@@ -758,6 +766,246 @@ class DatabaseManager {
     return this.db.prepare(
       'SELECT * FROM activity_logs WHERE project_name = ? ORDER BY created_at DESC LIMIT ?'
     ).all(projectName, limit);
+  }
+
+  // ========== AI Sessions (v1.2.0 新增) ==========
+
+  /**
+   * 创建 AI 会话
+   */
+  createAiSession(session) {
+    const stmt = this.db.prepare(`
+      INSERT INTO ai_sessions (
+        session_id, project_name, todo_id, session_type, prompt, status
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    const result = stmt.run(
+      session.session_id,
+      session.project_name,
+      session.todo_id || null,
+      session.session_type,
+      session.prompt,
+      session.status || 'running'
+    );
+
+    return { id: result.lastInsertRowid, ...session };
+  }
+
+  /**
+   * 更新 AI 会话状态
+   */
+  updateAiSession(sessionId, updates) {
+    const fields = [];
+    const values = [];
+
+    Object.keys(updates).forEach(key => {
+      fields.push(`${key} = ?`);
+      // JSON 字段需要序列化
+      if (key === 'result_summary' && typeof updates[key] === 'object') {
+        values.push(JSON.stringify(updates[key]));
+      } else {
+        values.push(updates[key]);
+      }
+    });
+
+    values.push(sessionId);
+
+    return this.db.prepare(
+      `UPDATE ai_sessions SET ${fields.join(', ')} WHERE session_id = ?`
+    ).run(...values);
+  }
+
+  /**
+   * 获取 AI 会话详情
+   */
+  getAiSession(sessionId) {
+    const session = this.db.prepare('SELECT * FROM ai_sessions WHERE session_id = ?').get(sessionId);
+    if (session && session.result_summary) {
+      try {
+        session.result_summary = JSON.parse(session.result_summary);
+      } catch (e) {
+        // 如果解析失败，保持原样
+      }
+    }
+    return session;
+  }
+
+  /**
+   * 获取 Todo 的所有 AI 会话
+   */
+  getAiSessionsByTodo(todoId) {
+    const sessions = this.db.prepare(
+      'SELECT * FROM ai_sessions WHERE todo_id = ? ORDER BY created_at DESC'
+    ).all(todoId);
+
+    return sessions.map(session => {
+      if (session.result_summary) {
+        try {
+          session.result_summary = JSON.parse(session.result_summary);
+        } catch (e) {
+          // 忽略解析错误
+        }
+      }
+      return session;
+    });
+  }
+
+  /**
+   * 获取项目的所有 AI 会话
+   */
+  getAiSessionsByProject(projectName, limit = 50) {
+    const sessions = this.db.prepare(
+      'SELECT * FROM ai_sessions WHERE project_name = ? ORDER BY created_at DESC LIMIT ?'
+    ).all(projectName, limit);
+
+    return sessions.map(session => {
+      if (session.result_summary) {
+        try {
+          session.result_summary = JSON.parse(session.result_summary);
+        } catch (e) {
+          // 忽略解析错误
+        }
+      }
+      return session;
+    });
+  }
+
+  // ========== AI Messages ==========
+
+  /**
+   * 创建 AI 消息
+   */
+  createAiMessage(message) {
+    const stmt = this.db.prepare(`
+      INSERT INTO ai_messages (session_id, message_type, content, metadata)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    return stmt.run(
+      message.session_id,
+      message.message_type,
+      message.content,
+      message.metadata ? JSON.stringify(message.metadata) : null
+    );
+  }
+
+  /**
+   * 获取会话的所有消息
+   */
+  getAiMessages(sessionId, limit = 100) {
+    const messages = this.db.prepare(
+      'SELECT * FROM ai_messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?'
+    ).all(sessionId, limit);
+
+    return messages.map(msg => {
+      if (msg.metadata) {
+        try {
+          msg.metadata = JSON.parse(msg.metadata);
+        } catch (e) {
+          // 忽略解析错误
+        }
+      }
+      return msg;
+    });
+  }
+
+  /**
+   * 批量创建 AI 消息
+   */
+  createAiMessagesBatch(messages) {
+    const stmt = this.db.prepare(`
+      INSERT INTO ai_messages (session_id, message_type, content, metadata)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const insert = this.db.transaction((msgs) => {
+      for (const msg of msgs) {
+        stmt.run(
+          msg.session_id,
+          msg.message_type,
+          msg.content,
+          msg.metadata ? JSON.stringify(msg.metadata) : null
+        );
+      }
+    });
+
+    insert(messages);
+  }
+
+  // ========== AI Verifications ==========
+
+  /**
+   * 创建 AI 验证记录
+   */
+  createAiVerification(verification) {
+    const stmt = this.db.prepare(`
+      INSERT INTO ai_verifications (
+        todo_id, session_id, verification_type, result, confidence,
+        issues_found, suggestions, evidence, verified_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const result = stmt.run(
+      verification.todo_id,
+      verification.session_id,
+      verification.verification_type || 'automatic',
+      verification.result,
+      verification.confidence || null,
+      verification.issues_found ? JSON.stringify(verification.issues_found) : null,
+      verification.suggestions ? JSON.stringify(verification.suggestions) : null,
+      verification.evidence ? JSON.stringify(verification.evidence) : null,
+      verification.verified_by || 'AI'
+    );
+
+    return { id: result.lastInsertRowid, ...verification };
+  }
+
+  /**
+   * 获取 Todo 的所有验证记录
+   */
+  getAiVerifications(todoId) {
+    const verifications = this.db.prepare(
+      'SELECT * FROM ai_verifications WHERE todo_id = ? ORDER BY verified_at DESC'
+    ).all(todoId);
+
+    return verifications.map(v => {
+      // 解析 JSON 字段
+      ['issues_found', 'suggestions', 'evidence'].forEach(field => {
+        if (v[field]) {
+          try {
+            v[field] = JSON.parse(v[field]);
+          } catch (e) {
+            // 忽略解析错误
+          }
+        }
+      });
+      return v;
+    });
+  }
+
+  /**
+   * 获取最新的验证记录
+   */
+  getLatestAiVerification(todoId) {
+    const verification = this.db.prepare(
+      'SELECT * FROM ai_verifications WHERE todo_id = ? ORDER BY verified_at DESC LIMIT 1'
+    ).get(todoId);
+
+    if (verification) {
+      // 解析 JSON 字段
+      ['issues_found', 'suggestions', 'evidence'].forEach(field => {
+        if (verification[field]) {
+          try {
+            verification[field] = JSON.parse(verification[field]);
+          } catch (e) {
+            // 忽略解析错误
+          }
+        }
+      });
+    }
+
+    return verification;
   }
 }
 

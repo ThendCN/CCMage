@@ -1,6 +1,7 @@
 const processManager = require('./processManager');
 const startupDetector = require('./startupDetector');
-const claudeCodeManager = require('./claudeCodeManager');
+const aiEngineFactory = require('./aiEngineFactory');
+const conversationManager = require('./conversationManager');
 const db = require('./database');
 const path = require('path');
 
@@ -241,11 +242,14 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   app.post('/api/projects/:name/ai', async (req, res) => {
     try {
       const { name } = req.params;
-      const { prompt } = req.body;
+      const { prompt, engine = 'claude-code', conversationId, todoId } = req.body;
 
       console.log(`[API] 📬 收到 AI 任务请求`);
       console.log(`[API]   - projectName: ${name}`);
+      console.log(`[API]   - engine: ${engine}`);
       console.log(`[API]   - prompt: ${prompt}`);
+      console.log(`[API]   - conversationId: ${conversationId || '(新对话)'}`);
+      console.log(`[API]   - todoId: ${todoId || '(无关联任务)'}`);
 
       if (!prompt || !prompt.trim()) {
         console.log('[API] ❌ 任务描述为空');
@@ -265,13 +269,39 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
 
       console.log(`[API] ✅ 项目路径: ${projectPath}`);
 
-      // 生成会话 ID
-      const sessionId = `${name}-${Date.now()}`;
-      console.log(`[API] 🆔 生成会话 ID: ${sessionId}`);
+      // 如果提供了 conversationId，生成该引擎对应的 sessionId
+      // 否则创建新的 conversationId
+      const actualConversationId = conversationId || `${name}-${Date.now()}`;
+      const sessionId = `${engine}-${actualConversationId}`;
 
-      // 异步执行（不等待完成）
-      console.log(`[API] 🚀 启动 AI 任务...`);
-      claudeCodeManager.execute(name, projectPath, prompt, sessionId)
+      console.log(`[API] 🆔 对话 ID: ${actualConversationId}`);
+      console.log(`[API] 🆔 会话 ID (${engine}): ${sessionId}`);
+
+      // ⚠️ 重要：必须先获取上下文，再添加用户消息
+      // 因为 addUserMessage 会更新 lastEngine，导致检测不到引擎切换
+
+      // 1. 先获取跨引擎上下文（在更新 lastEngine 之前）
+      const contextPrompt = conversationManager.getContextPrompt(actualConversationId, engine);
+
+      // 2. 再保存用户消息到对话历史
+      conversationManager.addUserMessage(actualConversationId, engine, prompt);
+
+      // 3. 将上下文附加到用户 prompt
+      const fullPrompt = contextPrompt ? contextPrompt + prompt : prompt;
+
+      if (contextPrompt) {
+        const stats = conversationManager.getStats(actualConversationId);
+        console.log(`[API] 📋 附加跨引擎上下文`);
+        console.log(`[API]   - 历史消息数: ${stats.messageCount}`);
+        console.log(`[API]   - 上下文长度: ${contextPrompt.length} 字符`);
+        console.log(`[API]   - 上下文预览: ${contextPrompt.substring(0, 100)}...`);
+      } else {
+        console.log(`[API] ℹ️  无需附加上下文（同引擎继续或首次对话）`);
+      }
+
+      // 异步执行（不等待完成），传入 todoId 参数
+      console.log(`[API] 🚀 启动 AI 任务 (${engine})...`);
+      aiEngineFactory.execute(engine, name, projectPath, fullPrompt, sessionId, todoId)
         .then(result => {
           console.log(`[API] ✅ AI 任务完成: ${sessionId}`);
         })
@@ -279,13 +309,52 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
           console.error(`[API] ❌ AI 任务失败: ${sessionId}`, error);
         });
 
+      // 监听完成事件，保存 AI 回复
+      const completeHandler = (result) => {
+        console.log(`[API] 📬 收到完成事件: ${sessionId}`);
+        console.log(`[API]   - success: ${result.success}`);
+        console.log(`[API]   - logs 数量: ${result.logs ? result.logs.length : 0}`);
+
+        if (result.success && result.logs) {
+          // 提取 AI 的文本回复
+          const assistantMessages = result.logs
+            .filter(log => log.type === 'stdout' && log.content)
+            .map(log => log.content)
+            .join('\n\n');
+
+          console.log(`[API]   - 提取的文本消息长度: ${assistantMessages.length}`);
+
+          if (assistantMessages) {
+            console.log(`[API] 📝 保存 AI 回复到对话历史`);
+            console.log(`[API]   - conversationId: ${actualConversationId}`);
+            console.log(`[API]   - engine: ${engine}`);
+            console.log(`[API]   - 消息预览: ${assistantMessages.substring(0, 50)}...`);
+            conversationManager.addAssistantMessage(actualConversationId, engine, assistantMessages);
+          } else {
+            console.log(`[API] ⚠️  没有提取到文本消息`);
+          }
+        } else {
+          console.log(`[API] ⚠️  任务失败或无日志`);
+        }
+
+        // 移除监听器
+        aiEngineFactory.off(engine, `ai-complete:${sessionId}`, completeHandler);
+        console.log(`[API] 🧹 已移除监听器: ai-complete:${sessionId}`);
+      };
+
+      console.log(`[API] 👂 注册完成事件监听器: ai-complete:${sessionId}`);
+      aiEngineFactory.on(engine, `ai-complete:${sessionId}`, completeHandler);
+
       // 立即返回会话信息
       console.log(`[API] 📤 返回会话信息`);
       res.json({
         success: true,
-        message: 'AI 任务已启动',
+        message: conversationId ? 'AI 任务已启动（继续对话）' : 'AI 任务已启动',
+        conversationId: actualConversationId,
         sessionId,
-        prompt
+        engine,
+        prompt,
+        hasContext: !!contextPrompt
       });
     } catch (error) {
       console.error('[API] ❌ 启动 AI 任务失败:', error);
@@ -297,9 +366,20 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   app.get('/api/projects/:name/ai/stream/:sessionId', (req, res) => {
     const { name, sessionId } = req.params;
 
+    // 从 sessionId 中提取引擎类型
+    // sessionId 格式: {engine}-{projectName}-{timestamp}
+    // 需要智能匹配，因为 engine 本身可能包含连字符 (如 claude-code)
+    let engine = 'claude-code'; // 默认引擎
+    if (sessionId.startsWith('codex-')) {
+      engine = 'codex';
+    } else if (sessionId.startsWith('claude-code-')) {
+      engine = 'claude-code';
+    }
+
     console.log(`[SSE] 📡 新的 SSE 连接`);
     console.log(`[SSE]   - projectName: ${name}`);
     console.log(`[SSE]   - sessionId: ${sessionId}`);
+    console.log(`[SSE]   - engine: ${engine}`);
 
     // 设置 SSE 响应头
     res.setHeader('Content-Type', 'text/event-stream');
@@ -313,7 +393,7 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
 
     // 监听新输出
     const outputHandler = (log) => {
-      console.log(`[SSE] 📨 收到新输出事件: ${log.type}, ${log.content.substring(0, 50)}...`);
+      console.log(`[SSE] 📨 收到新输出事件: ${log.type}, ${log.content?.substring(0, 50) || ''}...`);
       res.write(`data: ${JSON.stringify(log)}\n\n`);
       console.log(`[SSE] ✅ 已发送到客户端`);
     };
@@ -327,14 +407,14 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
     console.log(`[SSE] 👂 开始监听事件:`);
     console.log(`[SSE]   - ai-output:${sessionId}`);
     console.log(`[SSE]   - ai-complete:${sessionId}`);
-    claudeCodeManager.on(`ai-output:${sessionId}`, outputHandler);
-    claudeCodeManager.on(`ai-complete:${sessionId}`, completeHandler);
+    aiEngineFactory.on(engine, `ai-output:${sessionId}`, outputHandler);
+    aiEngineFactory.on(engine, `ai-complete:${sessionId}`, completeHandler);
 
     // 客户端断开连接时清理
     req.on('close', () => {
       console.log(`[SSE] 🔌 客户端断开连接: ${sessionId}`);
-      claudeCodeManager.off(`ai-output:${sessionId}`, outputHandler);
-      claudeCodeManager.off(`ai-complete:${sessionId}`, completeHandler);
+      aiEngineFactory.off(engine, `ai-output:${sessionId}`, outputHandler);
+      aiEngineFactory.off(engine, `ai-complete:${sessionId}`, completeHandler);
       console.log(`[SSE] 🧹 事件监听器已清理`);
     });
   });
@@ -343,7 +423,16 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   app.get('/api/projects/:name/ai/status/:sessionId', (req, res) => {
     try {
       const { sessionId } = req.params;
-      const status = claudeCodeManager.getSessionStatus(sessionId);
+
+      // 从 sessionId 中提取引擎类型
+      let engine = 'claude-code';
+      if (sessionId.startsWith('codex-')) {
+        engine = 'codex';
+      } else if (sessionId.startsWith('claude-code-')) {
+        engine = 'claude-code';
+      }
+
+      const status = aiEngineFactory.getSessionStatus(engine, sessionId);
       res.json(status);
     } catch (error) {
       res.status(500).json({ error: '获取会话状态失败', message: error.message });
@@ -351,10 +440,19 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   });
 
   // 16. 终止 AI 会话
-  app.post('/api/projects/:name/ai/terminate/:sessionId', (req, res) => {
+  app.post('/api/projects/:name/ai/terminate/:sessionId', async (req, res) => {
     try {
       const { sessionId } = req.params;
-      const result = claudeCodeManager.terminateSession(sessionId);
+
+      // 从 sessionId 中提取引擎类型
+      let engine = 'claude-code';
+      if (sessionId.startsWith('codex-')) {
+        engine = 'codex';
+      } else if (sessionId.startsWith('claude-code-')) {
+        engine = 'claude-code';
+      }
+
+      const result = await aiEngineFactory.terminateSession(engine, sessionId);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: '终止会话失败', message: error.message });
@@ -365,9 +463,10 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   app.get('/api/projects/:name/ai/history', (req, res) => {
     try {
       const { name } = req.params;
+      const { engine = 'claude-code' } = req.query;
       const limit = parseInt(req.query.limit) || 10;
-      const history = claudeCodeManager.getHistory(name, limit);
-      res.json({ history });
+      const history = aiEngineFactory.getHistory(engine, name, limit);
+      res.json({ history, engine });
     } catch (error) {
       res.status(500).json({ error: '获取历史记录失败', message: error.message });
     }
@@ -377,10 +476,26 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   app.get('/api/projects/:name/ai/history/:recordId', (req, res) => {
     try {
       const { name, recordId } = req.params;
-      const record = claudeCodeManager.getHistoryDetail(name, recordId);
+      const { engine = 'claude-code' } = req.query;
+
+      console.log('[API] 📖 获取历史记录详情');
+      console.log('[API]   - projectName:', name);
+      console.log('[API]   - recordId:', recordId);
+      console.log('[API]   - engine:', engine);
+
+      const record = aiEngineFactory.getHistoryDetail(engine, name, recordId);
+
       if (!record) {
+        console.log('[API] ❌ 历史记录不存在');
         return res.status(404).json({ error: '历史记录不存在' });
       }
+
+      console.log('[API] ✅ 找到历史记录');
+      console.log('[API]   - id:', record.id);
+      console.log('[API]   - prompt:', record.prompt?.substring(0, 50) + '...');
+      console.log('[API]   - logs 数量:', record.logs?.length || 0);
+      console.log('[API]   - success:', record.success);
+
       res.json(record);
     } catch (error) {
       res.status(500).json({ error: '获取历史详情失败', message: error.message });
@@ -391,20 +506,68 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   app.delete('/api/projects/:name/ai/history', (req, res) => {
     try {
       const { name } = req.params;
-      const result = claudeCodeManager.clearHistory(name);
+      const { engine = 'claude-code' } = req.query;
+      const result = aiEngineFactory.clearHistory(engine, name);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: '清空历史失败', message: error.message });
     }
   });
 
-  // 20. 获取所有活跃的 AI 会话
+  // 20. 清除对话上下文
+  app.delete('/api/conversations/:conversationId', (req, res) => {
+    try {
+      const { conversationId } = req.params;
+      conversationManager.clearConversation(conversationId);
+      res.json({ success: true, message: '对话上下文已清除' });
+    } catch (error) {
+      res.status(500).json({ error: '清除对话失败', message: error.message });
+    }
+  });
+
+  // 21. 获取对话统计
+  app.get('/api/conversations/:conversationId/stats', (req, res) => {
+    try {
+      const { conversationId } = req.params;
+      const stats = conversationManager.getStats(conversationId);
+      if (!stats) {
+        return res.status(404).json({ error: '对话不存在' });
+      }
+      res.json(stats);
+    } catch (error) {
+      res.status(500).json({ error: '获取对话统计失败', message: error.message });
+    }
+  });
+
+  // 22. 获取所有活跃的 AI 会话
   app.get('/api/ai/sessions', (req, res) => {
     try {
-      const sessions = claudeCodeManager.getActiveSessions();
-      res.json({ sessions });
+      const { engine = 'claude-code' } = req.query;
+      const sessions = aiEngineFactory.getActiveSessions(engine);
+      res.json({ sessions, engine });
     } catch (error) {
       res.status(500).json({ error: '获取会话列表失败', message: error.message });
+    }
+  });
+
+  // 21. 获取可用的 AI 引擎列表
+  app.get('/api/ai/engines', (req, res) => {
+    try {
+      const engines = aiEngineFactory.getAvailableEngines();
+      res.json({ engines });
+    } catch (error) {
+      res.status(500).json({ error: '获取引擎列表失败', message: error.message });
+    }
+  });
+
+  // 22. 检查引擎可用性
+  app.get('/api/ai/engines/:engine/check', async (req, res) => {
+    try {
+      const { engine } = req.params;
+      const available = await aiEngineFactory.checkEngineAvailable(engine);
+      res.json({ engine, available });
+    } catch (error) {
+      res.json({ engine: req.params.engine, available: false, error: error.message });
     }
   });
 }

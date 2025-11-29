@@ -47,13 +47,17 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
     try {
       const result = await selectFolder();
       if (result.success && result.detected) {
+        // 自动检测是否为绝对路径
+        const isAbsolutePath = /^([A-Za-z]:[\\/]|\/|~\/)/.test(result.path);
+
         setFormData(prev => ({
           ...prev,
           name: prev.name || result.detected.name,
           path: result.path,
           description: result.detected.description || prev.description,
           stack: result.detected.stack || prev.stack,
-          port: result.detected.port?.toString() || prev.port
+          port: result.detected.port?.toString() || prev.port,
+          isExternal: isAbsolutePath // 自动设置 isExternal
         }));
       }
     } catch (err) {
@@ -233,12 +237,31 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
               color: '#374151'
             }}>
               项目路径 *
+              <span style={{
+                marginLeft: '8px',
+                fontSize: '12px',
+                fontWeight: '400',
+                color: '#6b7280'
+              }}>
+                {formData.isExternal
+                  ? '(绝对路径，如：/Users/name/project 或 C:\\Projects\\project)'
+                  : '(相对路径，如：my-project 或 ../other-project)'}
+              </span>
             </label>
             <div style={{ display: 'flex', gap: '8px' }}>
               <input
                 type="text"
                 value={formData.path}
-                onChange={(e) => setFormData(prev => ({ ...prev, path: e.target.value }))}
+                onChange={(e) => {
+                  const newPath = e.target.value;
+                  // 自动检测绝对路径
+                  const isAbsolutePath = /^([A-Za-z]:[\\/]|\/|~\/)/.test(newPath);
+                  setFormData(prev => ({
+                    ...prev,
+                    path: newPath,
+                    isExternal: isAbsolutePath
+                  }));
+                }}
                 required
                 style={{
                   flex: 1,
@@ -247,7 +270,7 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
                   borderRadius: '6px',
                   fontSize: '14px'
                 }}
-                placeholder="项目文件夹路径"
+                placeholder={formData.isExternal ? '/Users/name/project' : 'my-project'}
               />
               <button
                 type="button"
@@ -447,10 +470,16 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
           </div>
 
           {/* 外部项目 */}
-          <div style={{ marginBottom: '24px' }}>
+          <div style={{
+            marginBottom: '24px',
+            padding: '12px',
+            background: '#f9fafb',
+            borderRadius: '8px',
+            border: '1px solid #e5e7eb'
+          }}>
             <label style={{
               display: 'flex',
-              alignItems: 'center',
+              alignItems: 'start',
               gap: '8px',
               fontSize: '14px',
               cursor: 'pointer'
@@ -459,9 +488,24 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
                 type="checkbox"
                 checked={formData.isExternal}
                 onChange={(e) => setFormData(prev => ({ ...prev, isExternal: e.target.checked }))}
-                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '2px' }}
               />
-              <span style={{ color: '#374151' }}>外部项目（使用绝对路径）</span>
+              <div>
+                <span style={{ color: '#374151', fontWeight: '500' }}>
+                  外部项目（使用绝对路径）
+                </span>
+                <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                  {formData.isExternal ? (
+                    <span style={{ color: '#10b981' }}>
+                      ✓ 将使用绝对路径，无需相对于项目根目录
+                    </span>
+                  ) : (
+                    <span>
+                      路径将相对于项目根目录（PROJECT_ROOT）进行解析
+                    </span>
+                  )}
+                </div>
+              </div>
             </label>
           </div>
 
