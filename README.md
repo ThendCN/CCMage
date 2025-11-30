@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/ThendCN/CCMage/wiki">📚 Wiki 文档</a> •
   <a href="#features">功能特性</a> •
   <a href="#quick-start">快速开始</a> •
   <a href="docs/QUICK_START_GUIDE.md">📖 快速上手指南</a> •
@@ -521,10 +522,20 @@ project-manager/
 
 ## 📚 API 接口文档 {#documentation}
 
-**用户文档**
+**📖 完整文档（推荐）**
+- 🌟 [GitHub Wiki](https://github.com/ThendCN/CCMage/wiki) - 完整的 Wiki 文档体系
+  - [快速开始](https://github.com/ThendCN/CCMage/wiki/Quick-Start) - 5 分钟上手指南
+  - [AI 功能详解](https://github.com/ThendCN/CCMage/wiki/AI-Features) - 多引擎 AI 使用指南
+  - [项目管理](https://github.com/ThendCN/CCMage/wiki/Project-Management) - Todo、里程碑、标签系统
+  - [API 参考](https://github.com/ThendCN/CCMage/wiki/API-Reference) - 完整的 API 文档
+  - [系统架构](https://github.com/ThendCN/CCMage/wiki/Architecture) - 架构设计文档
+  - [开发指南](https://github.com/ThendCN/CCMage/wiki/Development-Guide) - 贡献代码指南
+  - [常见问题](https://github.com/ThendCN/CCMage/wiki/FAQ) - 故障排查和解决方案
+
+**本地文档**
 - 📖 [快速上手指南（SOP）](docs/QUICK_START_GUIDE.md) - 完整的分步教程和最佳实践
 
-**API 文档**
+**API 文档（快速参考）**
 
 ### 项目管理 API
 
