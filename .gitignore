@@ -62,6 +62,9 @@ coverage/
 *.temp
 .cache/
 
+# Wiki (managed separately on GitHub)
+wiki/
+
 # Python virtual environments (if any)
 venv/
 .venv/
