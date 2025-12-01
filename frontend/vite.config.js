@@ -11,5 +11,15 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  build: {
+    // 强制清除缓存
+    rollupOptions: {
+      output: {
+        entryFileNames: `assets/[name].[hash].js`,
+        chunkFileNames: `assets/[name].[hash].js`,
+        assetFileNames: `assets/[name].[hash].[ext]`
+      }
+    }
   }
 })

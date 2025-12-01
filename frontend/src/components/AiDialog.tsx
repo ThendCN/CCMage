@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { X, Send, Loader, StopCircle, Clock, History, Trash2, Cpu, CheckCircle2, Circle, PlayCircle, PauseCircle } from 'lucide-react';
+import { useEffect, useRef, useState, useDeferredValue, useCallback } from 'react';
+import { X, Send, Loader, StopCircle, Clock, History, Trash2, Cpu, CheckCircle2, Circle, PlayCircle, PauseCircle, Minimize2, Maximize2 } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 import { getAvailableEngines, executeAI } from '../api';
 import type { AIEngine, AIEngineInfo, Todo } from '../types';
@@ -9,6 +9,7 @@ interface LogEntry {
   type: 'stdout' | 'stderr' | 'complete';
   content: string;
   sessionId: string;
+  _uniqueId?: string;  // 客户端生成的唯一ID
 }
 
 interface HistoryRecord {
@@ -26,10 +27,26 @@ interface Props {
   todoId?: number | null;  // 可选：关联的任务 ID
   initialPrompt?: string;  // 可选：初始提示词
   embedded?: boolean;      // 是否为嵌入模式
+  sessionId?: string | null;  // 可选：外部提供的会话 ID（用于诊断等场景）
+  minimized?: boolean;     // 是否最小化
+  onMinimize?: () => void; // 最小化回调
+  onMaximize?: () => void; // 最大化回调
 }
 
-export default function AiDialog({ projectName, onClose, todoId, initialPrompt, embedded = false }: Props) {
+export default function AiDialog({ projectName, onClose, todoId, initialPrompt, embedded = false, sessionId: externalSessionId, minimized = false, onMinimize, onMaximize }: Props) {
+  // 组件实例唯一ID，防止多个实例之间的 key 冲突
+  const instanceId = useRef(`instance-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`).current;
+
+  // 🔍 调试日志 - 验证修复代码已加载
+  useEffect(() => {
+    console.log('🔧 [AiDialog] 组件初始化 - KEY修复版本已加载');
+    console.log('🔧 [AiDialog] instanceId:', instanceId);
+  }, [instanceId]);
+
   const [prompt, setPrompt] = useState(initialPrompt || '');
+  // 使用 deferred value 来优化输入性能，避免每次按键都触发整个组件重渲染
+  const deferredPrompt = useDeferredValue(prompt);
+
   const [output, setOutput] = useState<LogEntry[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null); // 对话 ID（跨引擎）
@@ -42,6 +59,8 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
   const outputRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  // 日志计数器，用于生成唯一 key
+  const logCounter = useRef<number>(0);
 
   // 当 initialPrompt 变化时更新 prompt
   useEffect(() => {
@@ -160,7 +179,7 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
     }
   };
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     try {
       const response = await fetch(`/api/projects/${projectName}/ai/history?engine=${selectedEngine}`);
       const data = await response.json();
@@ -168,10 +187,10 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
     } catch (error) {
       console.error('加载历史失败:', error);
     }
-  };
+  }, [projectName, selectedEngine]);
 
   // 建立 SSE 连接
-  const setupSSEConnection = (sessionId: string) => {
+  const setupSSEConnection = useCallback((sessionId: string) => {
     console.log(`[前端] 📡 建立 SSE 连接: ${sessionId}`);
 
     // 关闭之前的连接
@@ -185,8 +204,10 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
       `/api/projects/${projectName}/ai/stream/${sessionId}`
     );
 
-    // 跟踪最后一条消息，用于简单去重
-    let lastMessage = '';
+    // 增强的去重逻辑：使用 Set 跟踪最近的消息指纹
+    const recentMessages = new Set<string>();
+    const MAX_RECENT_MESSAGES = 50; // 跟踪最近 50 条消息
+    const recentMessageQueue: string[] = [];
     let messageIndex = 0;
 
     eventSource.onmessage = (event) => {
@@ -203,13 +224,41 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
             inputRef.current?.focus();
           }, 0);
         } else {
-          // 简单去重：只有当内容与上一条完全相同时才认为是重复
-          const currentMessage = `${log.type}-${log.content}`;
+          // 生成消息指纹（类型 + 内容的前 200 字符）
+          const fingerprint = `${log.type}-${log.content?.substring(0, 200) || ''}`;
 
-          if (currentMessage !== lastMessage) {
+          // 检查是否为重复消息
+          if (!recentMessages.has(fingerprint)) {
             messageIndex++;
-            lastMessage = currentMessage;
-            setOutput(prev => [...prev, log]);
+
+            // 添加到去重集合
+            recentMessages.add(fingerprint);
+            recentMessageQueue.push(fingerprint);
+
+            // 限制集合大小，移除最旧的消息
+            if (recentMessageQueue.length > MAX_RECENT_MESSAGES) {
+              const oldestFingerprint = recentMessageQueue.shift();
+              if (oldestFingerprint) {
+                recentMessages.delete(oldestFingerprint);
+              }
+            }
+
+            // 为日志添加唯一 ID
+            const logWithId = {
+              ...log,
+              _uniqueId: `${instanceId}-log-${logCounter.current++}`
+            };
+
+            setOutput(prev => {
+              // 同时限制输出数组的总大小，防止内存溢出
+              const newOutput = [...prev, logWithId];
+              const MAX_OUTPUT_SIZE = 500; // 最多保留 500 条日志
+              if (newOutput.length > MAX_OUTPUT_SIZE) {
+                return newOutput.slice(-MAX_OUTPUT_SIZE);
+              }
+              return newOutput;
+            });
+
             console.log(`✅ 消息 #${messageIndex}:`, log.content?.substring(0, 50));
           } else {
             console.warn(`⚠️ 重复消息已忽略:`, log.content?.substring(0, 50));
@@ -226,9 +275,19 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
     };
 
     eventSourceRef.current = eventSource;
-  };
+  }, [projectName, loadHistory, instanceId]);
 
-  const handleExecute = async () => {
+  // 当外部传入 sessionId 时，自动建立 SSE 连接（用于诊断等场景）
+  useEffect(() => {
+    if (externalSessionId) {
+      console.log(`[前端] 🔧 接收到外部 sessionId: ${externalSessionId}`);
+      setCurrentSessionId(externalSessionId);
+      setIsRunning(true);
+      setupSSEConnection(externalSessionId);
+    }
+  }, [externalSessionId, setupSSEConnection]);
+
+  const handleExecute = useCallback(async () => {
     if (!prompt.trim() || isRunning) return;
 
     const currentPrompt = prompt.trim();
@@ -262,9 +321,9 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
       setIsRunning(false);
       setPrompt(currentPrompt);  // 出错时恢复输入框内容
     }
-  };
+  }, [prompt, isRunning, projectName, selectedEngine, conversationId, todoId, setupSSEConnection]);
 
-  const handleTerminate = async () => {
+  const handleTerminate = useCallback(async () => {
     if (!currentSessionId) return;
 
     try {
@@ -282,9 +341,9 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
     } catch (error) {
       console.error('终止失败:', error);
     }
-  };
+  }, [currentSessionId, projectName]);
 
-  const handleNewConversation = async () => {
+  const handleNewConversation = useCallback(async () => {
     if (isRunning) {
       if (!confirm('当前有任务正在运行，确定要开始新对话吗？')) {
         return;
@@ -307,15 +366,16 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
       }
     }
 
-    // 清空对话和会话
+    // 清空对话和会话，重置计数器
+    logCounter.current = 0;
     setConversationId(null);
     setCurrentSessionId(null);
     setOutput([]);
     setPrompt('');
     console.log('[前端] 已清空对话，准备开始新对话');
-  };
+  }, [isRunning, currentSessionId, conversationId, handleTerminate]);
 
-  const handleClearHistory = async () => {
+  const handleClearHistory = useCallback(async () => {
     if (!confirm('确定要清空所有历史记录吗？')) return;
 
     try {
@@ -326,9 +386,9 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
     } catch (error) {
       console.error('清空历史失败:', error);
     }
-  };
+  }, [projectName]);
 
-  const loadHistoryDetail = async (recordId: string) => {
+  const loadHistoryDetail = useCallback(async (recordId: string) => {
     try {
       console.log('[前端] 📖 加载历史记录详情');
       console.log('[前端]   - recordId:', recordId);
@@ -346,9 +406,16 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
       console.log('[前端]   - record:', record);
       console.log('[前端]   - logs 数量:', record.logs?.length || 0);
 
+      // 重置计数器，为历史记录的每条日志添加唯一 ID
+      logCounter.current = 0;
+      const logsWithIds = (record.logs || []).map((log: any) => ({
+        ...log,
+        _uniqueId: `${instanceId}-log-${logCounter.current++}`
+      }));
+
       // 显示历史输出
       setPrompt('');  // 清空输入框
-      setOutput(record.logs || []);
+      setOutput(logsWithIds);
       setShowHistory(false);
 
       console.log('[前端] ✅ 历史记录已加载');
@@ -356,7 +423,19 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
       console.error('[前端] ❌ 加载历史详情失败:', error);
       alert('加载历史记录失败: ' + (error instanceof Error ? error.message : '未知错误'));
     }
-  };
+  }, [projectName, selectedEngine, instanceId]);
+
+  // 优化输入框事件处理
+  const handlePromptChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setPrompt(e.target.value);
+  }, []);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      handleExecute();
+    }
+  }, [handleExecute]);
 
   const formatDuration = (ms: number) => {
     const seconds = Math.floor(ms / 1000);
@@ -368,6 +447,132 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString('zh-CN');
   };
+
+  // 最小化浮动窗口
+  const minimizedWidget = (
+    <div style={{
+      position: 'fixed',
+      bottom: '24px',
+      right: '24px',
+      background: 'white',
+      borderRadius: '12px',
+      boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+      padding: '16px 20px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '12px',
+      minWidth: '280px',
+      zIndex: 1000,
+      border: '1px solid #e5e7eb',
+      cursor: 'pointer',
+      transition: 'all 0.2s'
+    }}
+    onClick={onMaximize}
+    onMouseEnter={(e) => {
+      e.currentTarget.style.boxShadow = '0 6px 24px rgba(0,0,0,0.2)';
+    }}
+    onMouseLeave={(e) => {
+      e.currentTarget.style.boxShadow = '0 4px 20px rgba(0,0,0,0.15)';
+    }}
+    >
+      {/* AI 图标和状态 */}
+      <div style={{
+        width: '40px',
+        height: '40px',
+        borderRadius: '8px',
+        background: isRunning ? '#dbeafe' : '#f3f4f6',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}>
+        {isRunning ? (
+          <Loader size={20} color="#3b82f6" style={{ animation: 'spin 1s linear infinite' }} />
+        ) : (
+          <Cpu size={20} color="#6b7280" />
+        )}
+      </div>
+
+      {/* 信息区域 */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontSize: '14px',
+          fontWeight: '600',
+          color: '#111827',
+          marginBottom: '2px'
+        }}>
+          AI 编程助手
+        </div>
+        <div style={{
+          fontSize: '12px',
+          color: '#6b7280',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }}>
+          {isRunning ? (
+            <>
+              <span style={{ color: '#3b82f6' }}>● </span>
+              正在工作中...
+            </>
+          ) : (
+            `${projectName} - 就绪`
+          )}
+        </div>
+      </div>
+
+      {/* 操作按钮 */}
+      <div style={{ display: 'flex', gap: '4px' }} onClick={(e) => e.stopPropagation()}>
+        {isRunning && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleTerminate();
+            }}
+            style={{
+              padding: '6px',
+              border: 'none',
+              borderRadius: '6px',
+              background: '#fee2e2',
+              color: '#dc2626',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center'
+            }}
+            title="终止任务"
+          >
+            <StopCircle size={16} />
+          </button>
+        )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onMaximize?.();
+          }}
+          style={{
+            padding: '6px',
+            border: 'none',
+            borderRadius: '6px',
+            background: '#f3f4f6',
+            color: '#374151',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center'
+          }}
+          title="展开"
+        >
+          <Maximize2 size={16} />
+        </button>
+      </div>
+
+      {/* 添加旋转动画的样式 */}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+    </div>
+  );
 
   // 主内容容器
   const mainContent = (
@@ -488,6 +693,25 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
               <History size={16} />
               历史记录
             </button>
+
+            {!embedded && onMinimize && (
+              <button
+                onClick={onMinimize}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '8px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '6px',
+                  background: 'white',
+                  color: '#6b7280',
+                  cursor: 'pointer'
+                }}
+                title="最小化到后台"
+              >
+                <Minimize2 size={20} />
+              </button>
+            )}
 
             {!embedded && onClose && (
               <button
@@ -813,20 +1037,27 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
                   {isRunning ? '正在执行...' : '输入任务描述后点击"执行"按钮'}
                 </div>
               ) : (
-                output.map((log, index) => (
-                  <div
-                    key={index}
-                    style={{
-                      marginBottom: '16px',
-                      padding: '12px',
-                      background: log.type === 'stderr' ? '#3f1d1d' : 'transparent',
-                      borderRadius: '8px',
-                      borderLeft: log.type === 'stderr' ? '3px solid #f87171' : 'none'
-                    }}
-                  >
-                    <MarkdownRenderer content={log.content} />
-                  </div>
-                ))
+                output.map((log: any, index) => {
+                  const key = log._uniqueId || `fallback-${index}`;
+                  // 🔍 调试日志 - 验证 key 是否唯一
+                  if (index === 0) {
+                    console.log('🔧 [AiDialog] 渲染日志，第一条 key:', key);
+                  }
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        marginBottom: '16px',
+                        padding: '12px',
+                        background: log.type === 'stderr' ? '#3f1d1d' : 'transparent',
+                        borderRadius: '8px',
+                        borderLeft: log.type === 'stderr' ? '3px solid #f87171' : 'none'
+                      }}
+                    >
+                      <MarkdownRenderer content={log.content} />
+                    </div>
+                  );
+                })
               )}
             </div>
 
@@ -840,12 +1071,8 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
                 <textarea
                   ref={inputRef}
                   value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                      handleExecute();
-                    }
-                  }}
+                  onChange={handlePromptChange}
+                  onKeyDown={handleKeyDown}
                   placeholder="输入你想让 AI 做的事情... (Cmd/Ctrl + Enter 执行)"
                   disabled={isRunning}
                   style={{
@@ -913,6 +1140,11 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
         </div>
       </div>
   );
+
+  // 如果是最小化状态，只显示浮动窗口
+  if (minimized) {
+    return minimizedWidget;
+  }
 
   // 根据模式返回不同的包装
   return embedded ? mainContent : (

@@ -19,7 +19,12 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
     port: '',
     stack: [] as string[],
     startCommand: '',
-    isExternal: false
+    isExternal: false,
+    // 新增：端口配置
+    projectType: 'unknown' as 'frontend' | 'backend' | 'fullstack' | 'unknown',
+    frontendPort: '',
+    backendPort: '',
+    linkedProject: ''
   });
 
   const [loading, setLoading] = useState(false);
@@ -36,7 +41,12 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
         port: existingProject.port?.toString() || '',
         stack: existingProject.stack || [],
         startCommand: existingProject.startCommand || '',
-        isExternal: existingProject.isExternal || false
+        isExternal: existingProject.isExternal || false,
+        // 新增：端口配置
+        projectType: existingProject.projectType || 'unknown',
+        frontendPort: existingProject.frontendPort?.toString() || '',
+        backendPort: existingProject.backendPort?.toString() || '',
+        linkedProject: existingProject.linkedProject || ''
       });
     }
   }, [mode, projectName, existingProject]);
@@ -79,7 +89,12 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
         status: formData.status,
         port: formData.port ? parseInt(formData.port) : undefined,
         stack: formData.stack,
-        startCommand: formData.startCommand || undefined
+        startCommand: formData.startCommand || undefined,
+        // 新增：端口配置
+        projectType: formData.projectType !== 'unknown' ? formData.projectType : undefined,
+        frontendPort: formData.frontendPort ? parseInt(formData.frontendPort) : undefined,
+        backendPort: formData.backendPort ? parseInt(formData.backendPort) : undefined,
+        linkedProject: formData.linkedProject || undefined
       };
 
       if (mode === 'add') {
@@ -352,30 +367,162 @@ export default function ProjectConfigDialog({ mode, projectName, existingProject
             </select>
           </div>
 
-          {/* 端口号 */}
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{
-              display: 'block',
-              marginBottom: '8px',
-              fontSize: '14px',
-              fontWeight: '500',
-              color: '#374151'
+          {/* ========== 端口配置 ========== */}
+          <div style={{
+            marginBottom: '24px',
+            padding: '16px',
+            background: '#f0f9ff',
+            border: '1px solid #bae6fd',
+            borderRadius: '8px'
+          }}>
+            <h3 style={{
+              fontSize: '16px',
+              fontWeight: '600',
+              color: '#111827',
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
             }}>
-              端口号
-            </label>
-            <input
-              type="number"
-              value={formData.port}
-              onChange={(e) => setFormData(prev => ({ ...prev, port: e.target.value }))}
-              style={{
-                width: '100%',
-                padding: '10px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '6px',
-                fontSize: '14px'
-              }}
-              placeholder="例如：3000"
-            />
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="2" y1="12" x2="22" y2="12"/>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+              </svg>
+              端口配置
+            </h3>
+
+            {/* 项目类型 */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{
+                display: 'block',
+                marginBottom: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                color: '#374151'
+              }}>
+                项目类型
+              </label>
+              <select
+                value={formData.projectType}
+                onChange={(e) => setFormData(prev => ({ ...prev, projectType: e.target.value as any }))}
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  background: 'white'
+                }}
+              >
+                <option value="unknown">未知</option>
+                <option value="frontend">纯前端</option>
+                <option value="backend">纯后端</option>
+                <option value="fullstack">全栈（前后端分离）</option>
+              </select>
+            </div>
+
+            {/* 前端端口 */}
+            {(formData.projectType === 'frontend' || formData.projectType === 'fullstack') && (
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{
+                  display: 'block',
+                  marginBottom: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#16a34a'
+                }}>
+                  前端端口
+                </label>
+                <input
+                  type="number"
+                  value={formData.frontendPort}
+                  onChange={(e) => setFormData(prev => ({ ...prev, frontendPort: e.target.value }))}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    background: 'white'
+                  }}
+                  placeholder="例如：5173 (Vite) 或 3000 (Next.js)"
+                />
+              </div>
+            )}
+
+            {/* 后端端口 */}
+            {(formData.projectType === 'backend' || formData.projectType === 'fullstack') && (
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{
+                  display: 'block',
+                  marginBottom: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#2563eb'
+                }}>
+                  后端端口
+                </label>
+                <input
+                  type="number"
+                  value={formData.backendPort}
+                  onChange={(e) => setFormData(prev => ({ ...prev, backendPort: e.target.value }))}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    background: 'white'
+                  }}
+                  placeholder="例如：9999 或 3001"
+                />
+              </div>
+            )}
+
+            {/* 关联项目 */}
+            {formData.projectType === 'frontend' && (
+              <div style={{ marginBottom: '0' }}>
+                <label style={{
+                  display: 'block',
+                  marginBottom: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151'
+                }}>
+                  关联的后端项目
+                  <span style={{
+                    marginLeft: '8px',
+                    fontSize: '12px',
+                    fontWeight: '400',
+                    color: '#6b7280'
+                  }}>
+                    (可选)
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.linkedProject}
+                  onChange={(e) => setFormData(prev => ({ ...prev, linkedProject: e.target.value }))}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    background: 'white'
+                  }}
+                  placeholder="输入后端项目名称，例如：my-backend"
+                />
+                <div style={{
+                  fontSize: '12px',
+                  color: '#6b7280',
+                  marginTop: '6px'
+                }}>
+                  启动此项目时可自动启动关联的后端项目
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 技术栈 */}

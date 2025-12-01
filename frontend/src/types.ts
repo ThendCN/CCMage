@@ -45,6 +45,20 @@ export interface ProjectStatus {
   hasDependencies: boolean;
   dependenciesInstalled: boolean;
   port: number | null;
+  // 端口配置信息
+  portConfig?: {
+    projectType: string;
+    frontendPort?: number;
+    backendPort?: number;
+    detectedType?: string;
+    configPath?: string;
+  };
+  dbPortConfig?: {
+    projectType?: string;
+    frontendPort?: number;
+    backendPort?: number;
+    linkedProject?: string;
+  };
 }
 
 export interface ActionRequest {

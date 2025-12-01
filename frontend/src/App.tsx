@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { RefreshCw, Folder, Activity, Play, Square, CheckSquare, Square as SquareIcon, Settings as SettingsIcon, Search, Plus, Sparkles } from 'lucide-react';
+import { RefreshCw, Folder, Activity, Play, Square, CheckSquare, Square as SquareIcon, Settings as SettingsIcon, Search, Plus, Sparkles, Grid, List } from 'lucide-react';
 import { ProjectsConfig, ProjectStatus } from './types';
-import { fetchProjects, fetchBatchStatus, batchOperation, analyzeAllProjects, getAnalysisStats } from './api';
+import { fetchProjects, fetchBatchStatus, batchOperation, analyzeAllProjects, getAnalysisStats, batchGetRunningStatus } from './api';
 import ProjectCard from './components/ProjectCard';
 import Settings from './components/Settings';
 import ProjectConfigDialog from './components/ProjectConfigDialog';
@@ -14,8 +14,10 @@ import AiDialog from './components/AiDialog';
 export default function App() {
   const [config, setConfig] = useState<ProjectsConfig | null>(null);
   const [statuses, setStatuses] = useState<Map<string, ProjectStatus>>(new Map());
+  const [runningStatuses, setRunningStatuses] = useState<Map<string, any>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>('all');
+  const [filter, setFilter] = useState<string>('active'); // 默认显示活跃项目
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid'); // 视图模式
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
@@ -30,6 +32,7 @@ export default function App() {
   const [showTodoManager, setShowTodoManager] = useState<string | null>(null);
   const [showLogViewer, setShowLogViewer] = useState<string | null>(null);
   const [showAiDialog, setShowAiDialog] = useState<string | null>(null);
+  const [isAiDialogMinimized, setIsAiDialogMinimized] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -56,6 +59,39 @@ export default function App() {
       window.removeEventListener('openAiDialog' as any, handleOpenAiDialog as any);
     };
   }, []);
+
+  // 批量轮询运行状态
+  useEffect(() => {
+    if (!config) return;
+
+    const allProjectNames = [
+      ...Object.keys(config.projects || {}),
+      ...Object.keys(config.external || {})
+    ];
+
+    if (allProjectNames.length === 0) return;
+
+    const fetchRunningStatuses = async () => {
+      try {
+        const statuses = await batchGetRunningStatus(allProjectNames);
+        const statusMap = new Map<string, any>();
+        Object.entries(statuses).forEach(([name, status]) => {
+          statusMap.set(name, status);
+        });
+        setRunningStatuses(statusMap);
+      } catch (error) {
+        console.error('批量获取运行状态失败:', error);
+      }
+    };
+
+    // 立即执行一次
+    fetchRunningStatuses();
+
+    // 固定轮询间隔：5秒一次
+    const interval = setInterval(fetchRunningStatuses, 5000);
+
+    return () => clearInterval(interval);
+  }, [config]);
 
   const loadData = async () => {
     setLoading(true);
@@ -212,39 +248,7 @@ export default function App() {
                 <span>总计: {config.meta?.totalProjects || 0} 个</span>
                 <span>|</span>
                 <span>活跃: {config.meta?.activeProjects || 0} 个</span>
-                {analysisStats && (
-                  <>
-                    <span>|</span>
-                    <span>已分析: {analysisStats.analyzed_count || 0} 个</span>
-                    {analysisStats.analyzing_count > 0 && (
-                      <span style={{ color: '#f59e0b' }}>
-                        (分析中: {analysisStats.analyzing_count})
-                      </span>
-                    )}
-                  </>
-                )}
               </div>
-              <button
-                onClick={handleAnalyzeAll}
-                disabled={isAnalyzing}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  border: 'none',
-                  borderRadius: '6px',
-                  background: isAnalyzing ? '#9ca3af' : '#8b5cf6',
-                  color: 'white',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  cursor: isAnalyzing ? 'not-allowed' : 'pointer',
-                  opacity: isAnalyzing ? 0.7 : 1
-                }}
-              >
-                <Search size={16} />
-                {isAnalyzing ? '分析中...' : '批量分析'}
-              </button>
               <button
                 onClick={() => setShowProjectCreation(true)}
                 style={{
@@ -289,28 +293,6 @@ export default function App() {
                 手动添加项目
               </button>
               <button
-                onClick={() => {
-                  setSelectionMode(!selectionMode);
-                  setSelectedProjects(new Set());
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '6px',
-                  background: selectionMode ? '#3b82f6' : 'white',
-                  color: selectionMode ? 'white' : '#374151',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  cursor: 'pointer'
-                }}
-              >
-                <CheckSquare size={16} />
-                {selectionMode ? '退出多选' : '批量操作'}
-              </button>
-              <button
                 onClick={() => setShowSettings(true)}
                 style={{
                   display: 'flex',
@@ -329,143 +311,84 @@ export default function App() {
                 <SettingsIcon size={16} />
                 设置
               </button>
-              <button
-                onClick={loadData}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '6px',
-                  background: 'white',
-                  color: '#374151',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  cursor: 'pointer'
-                }}
-              >
-                <RefreshCw size={16} />
-                刷新
-              </button>
             </div>
           </div>
 
           {/* Filters */}
-          <div style={{ marginTop: '20px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {[
-              { key: 'all', label: '全部' },
-              { key: 'active', label: '活跃项目' },
-              { key: 'production', label: '生产项目' },
-              { key: 'external', label: '外部项目' },
-              { key: 'archived', label: '归档项目' },
-            ].map(({ key, label }) => (
+          <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {[
+                { key: 'all', label: '全部' },
+                { key: 'active', label: '活跃项目' },
+                { key: 'production', label: '生产项目' },
+                { key: 'external', label: '外部项目' },
+                { key: 'archived', label: '归档项目' },
+              ].map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setFilter(key)}
+                  style={{
+                    padding: '6px 12px',
+                    border: filter === key ? 'none' : '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    background: filter === key ? '#3b82f6' : 'white',
+                    color: filter === key ? 'white' : '#374151',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {/* 视图切换按钮 */}
+            <div style={{ display: 'flex', gap: '4px', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '2px', background: 'white' }}>
               <button
-                key={key}
-                onClick={() => setFilter(key)}
+                onClick={() => setViewMode('grid')}
                 style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
                   padding: '6px 12px',
-                  border: filter === key ? 'none' : '1px solid #e5e7eb',
-                  borderRadius: '6px',
-                  background: filter === key ? '#3b82f6' : 'white',
-                  color: filter === key ? 'white' : '#374151',
+                  border: 'none',
+                  borderRadius: '4px',
+                  background: viewMode === 'grid' ? '#3b82f6' : 'transparent',
+                  color: viewMode === 'grid' ? 'white' : '#6b7280',
                   fontSize: '14px',
                   cursor: 'pointer',
                   transition: 'all 0.2s'
                 }}
               >
-                {label}
+                <Grid size={16} />
+                卡片
               </button>
-            ))}
+              <button
+                onClick={() => setViewMode('list')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '6px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  background: viewMode === 'list' ? '#3b82f6' : 'transparent',
+                  color: viewMode === 'list' ? 'white' : '#6b7280',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <List size={16} />
+                列表
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main style={{ padding: '40px', maxWidth: '1400px', margin: '0 auto' }}>
-        {/* 批量操作工具栏 */}
-        {selectionMode && selectedProjects.size > 0 && (
-          <div style={{
-            marginBottom: '24px',
-            padding: '16px 20px',
-            background: 'white',
-            borderRadius: '12px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between'
-          }}>
-            <div style={{ fontSize: '14px', color: '#6b7280' }}>
-              已选择 <strong style={{ color: '#3b82f6' }}>{selectedProjects.size}</strong> 个项目
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                onClick={() => handleBatchOperation('start')}
-                disabled={batchLoading}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  border: 'none',
-                  borderRadius: '6px',
-                  background: '#10b981',
-                  color: 'white',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  cursor: batchLoading ? 'not-allowed' : 'pointer',
-                  opacity: batchLoading ? 0.5 : 1
-                }}
-              >
-                <Play size={16} />
-                批量启动
-              </button>
-              <button
-                onClick={() => handleBatchOperation('stop')}
-                disabled={batchLoading}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  border: 'none',
-                  borderRadius: '6px',
-                  background: '#ef4444',
-                  color: 'white',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  cursor: batchLoading ? 'not-allowed' : 'pointer',
-                  opacity: batchLoading ? 0.5 : 1
-                }}
-              >
-                <Square size={16} />
-                批量停止
-              </button>
-              <button
-                onClick={() => handleBatchOperation('restart')}
-                disabled={batchLoading}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '6px',
-                  background: 'white',
-                  color: '#374151',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  cursor: batchLoading ? 'not-allowed' : 'pointer',
-                  opacity: batchLoading ? 0.5 : 1
-                }}
-              >
-                <RefreshCw size={16} />
-                批量重启
-              </button>
-            </div>
-          </div>
-        )}
-
         {filteredProjects.length === 0 ? (
           <div style={{
             textAlign: 'center',
@@ -475,7 +398,7 @@ export default function App() {
             <Folder size={48} style={{ margin: '0 auto 16px', opacity: 0.3 }} />
             <p>暂无项目</p>
           </div>
-        ) : (
+        ) : viewMode === 'grid' ? (
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))',
@@ -487,6 +410,7 @@ export default function App() {
                 name={name}
                 project={project}
                 status={statuses.get(name)}
+                runningStatus={runningStatuses.get(name)}
                 onAction={loadData}
                 onOpenDetail={(projectName) => setDetailProjectName(projectName)}
                 onEdit={(projectName, projectData) => {
@@ -494,11 +418,197 @@ export default function App() {
                   setEditingProject({ name: projectName, project: projectData });
                   setShowProjectConfig(true);
                 }}
-                selectionMode={selectionMode}
-                isSelected={selectedProjects.has(name)}
-                onSelect={() => toggleProjectSelection(name)}
+                selectionMode={false}
+                isSelected={false}
+                onSelect={() => {}}
               />
             ))}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {filteredProjects.map(([name, project]) => {
+              const status = statuses.get(name);
+              const runningStatus = runningStatuses.get(name);
+              const isRunning = runningStatus?.running || false;
+              const gitStatus = status?.gitStatus;
+              const hasChanges = gitStatus && (gitStatus.modified > 0 || gitStatus.untracked > 0);
+
+              return (
+                <div
+                  key={name}
+                  style={{
+                    background: 'white',
+                    borderRadius: '12px',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                    transition: 'all 0.2s',
+                    border: '1px solid #e5e7eb',
+                    overflow: 'hidden'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.12)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+                  }}
+                >
+                  {/* 主信息区 */}
+                  <div
+                    onClick={() => setDetailProjectName(name)}
+                    style={{
+                      padding: '20px 24px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px'
+                    }}
+                  >
+                    {/* 第一行：标题和状态 */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      {/* 状态指示器 */}
+                      <div style={{
+                        width: '10px',
+                        height: '10px',
+                        borderRadius: '50%',
+                        background: isRunning ? '#10b981' : '#9ca3af',
+                        flexShrink: 0
+                      }} />
+
+                      {/* 项目名称 */}
+                      <div style={{ flex: 1 }}>
+                        <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', margin: 0 }}>
+                          {name}
+                        </h3>
+                      </div>
+
+                      {/* 运行状态徽章 */}
+                      <div style={{
+                        padding: '6px 16px',
+                        borderRadius: '16px',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        background: isRunning ? '#dcfce7' : '#f3f4f6',
+                        color: isRunning ? '#16a34a' : '#6b7280'
+                      }}>
+                        {isRunning ? '● 运行中' : '○ 已停止'}
+                      </div>
+
+                      {/* Git 状态 */}
+                      {hasChanges && (
+                        <div style={{
+                          padding: '6px 12px',
+                          borderRadius: '16px',
+                          fontSize: '12px',
+                          background: '#fef3c7',
+                          color: '#d97706',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          <Activity size={12} />
+                          {gitStatus.modified > 0 && `${gitStatus.modified} 修改`}
+                          {gitStatus.modified > 0 && gitStatus.untracked > 0 && ' · '}
+                          {gitStatus.untracked > 0 && `${gitStatus.untracked} 未追踪`}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 第二行：描述 */}
+                    <div style={{
+                      color: '#6b7280',
+                      fontSize: '14px',
+                      lineHeight: '1.5',
+                      paddingLeft: '26px'
+                    }}>
+                      {project.description || '暂无描述'}
+                    </div>
+
+                    {/* 第三行：详细信息 */}
+                    <div style={{
+                      display: 'flex',
+                      gap: '24px',
+                      paddingLeft: '26px',
+                      fontSize: '13px',
+                      color: '#6b7280'
+                    }}>
+                      {/* 技术栈 */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontWeight: '500', color: '#9ca3af' }}>技术栈:</span>
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                          {status?.techStack && status.techStack.length > 0 ? (
+                            status.techStack.map((tech: string) => (
+                              <span
+                                key={tech}
+                                style={{
+                                  padding: '3px 10px',
+                                  background: '#f3f4f6',
+                                  color: '#374151',
+                                  borderRadius: '4px',
+                                  fontSize: '12px'
+                                }}
+                              >
+                                {tech}
+                              </span>
+                            ))
+                          ) : (
+                            <span style={{ color: '#9ca3af' }}>未检测</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 依赖状态 */}
+                      {status?.dependencies && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontWeight: '500', color: '#9ca3af' }}>依赖:</span>
+                          <span style={{
+                            padding: '3px 10px',
+                            background: status.dependencies === 'installed' ? '#dcfce7' : '#fee2e2',
+                            color: status.dependencies === 'installed' ? '#16a34a' : '#dc2626',
+                            borderRadius: '4px',
+                            fontSize: '12px'
+                          }}>
+                            {status.dependencies === 'installed' ? '✓ 已安装' : '✗ 未安装'}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* 端口信息 */}
+                      {runningStatus?.port && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontWeight: '500', color: '#9ca3af' }}>端口:</span>
+                          <span style={{
+                            padding: '3px 10px',
+                            background: '#e0e7ff',
+                            color: '#4338ca',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            fontFamily: 'monospace'
+                          }}>
+                            :{runningStatus.port}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Git 分支 */}
+                      {gitStatus?.branch && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontWeight: '500', color: '#9ca3af' }}>分支:</span>
+                          <span style={{
+                            padding: '3px 10px',
+                            background: '#f3f4f6',
+                            color: '#374151',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            fontFamily: 'monospace'
+                          }}>
+                            {gitStatus.branch}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </main>
@@ -551,8 +661,17 @@ export default function App() {
           name={detailProjectName}
           project={config.projects[detailProjectName] || config.external?.[detailProjectName]}
           status={statuses.get(detailProjectName)}
+          runningStatus={runningStatuses.get(detailProjectName)}
           onClose={() => setDetailProjectName(null)}
           onRefresh={loadData}
+          onEdit={() => {
+            setProjectConfigMode('edit');
+            setEditingProject({
+              name: detailProjectName,
+              project: config.projects[detailProjectName] || config.external?.[detailProjectName]
+            });
+            setShowProjectConfig(true);
+          }}
         />
       )}
 
@@ -576,7 +695,13 @@ export default function App() {
       {showAiDialog && (
         <AiDialog
           projectName={showAiDialog}
-          onClose={() => setShowAiDialog(null)}
+          minimized={isAiDialogMinimized}
+          onMinimize={() => setIsAiDialogMinimized(true)}
+          onMaximize={() => setIsAiDialogMinimized(false)}
+          onClose={() => {
+            setShowAiDialog(null);
+            setIsAiDialogMinimized(false);
+          }}
         />
       )}
     </div>

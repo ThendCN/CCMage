@@ -9,9 +9,13 @@ const { registerManagementRoutes } = require('./managementRoutes');
 const { registerAnalysisRoutes } = require('./analysisRoutes');
 const { registerProjectCreationRoutes } = require('./projectCreationRoutes');
 const { registerTodoAiRoutes } = require('./todoAiRoutes');
+const { registerPortRoutes } = require('./portRoutes');
+const { registerAIStatsRoutes } = require('./aiStatsRoutes');
+const { registerFrpcRoutes } = require('./frpcRoutes');
 const fileRoutes = require('./fileRoutes');
 const processManager = require('./processManager');
 const db = require('./database');
+const portService = require('./portService');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const execPromise = util.promisify(exec);
@@ -173,9 +177,20 @@ app.get('/api/projects/:name/status', async (req, res) => {
     const projectPath = path.isAbsolute(project.path)
       ? project.path
       : path.join(PROJECT_ROOT, project.path);
-    const status = await checkProjectStatus(projectPath, projectData);
+    const status = await checkProjectStatus(projectPath, projectData, name);
 
-    res.json({ name, ...status });
+    // 返回状态信息，包含数据库中的端口配置
+    res.json({
+      name,
+      ...status,
+      // 包含数据库中的端口配置
+      dbPortConfig: {
+        projectType: project.project_type,
+        frontendPort: project.frontend_port,
+        backendPort: project.backend_port,
+        linkedProject: project.linked_project
+      }
+    });
   } catch (error) {
     res.status(500).json({ error: '检查项目状态失败', message: error.message });
   }
@@ -205,8 +220,33 @@ app.post('/api/projects/status/batch', async (req, res) => {
       const projectPath = path.isAbsolute(project.path)
         ? project.path
         : path.join(PROJECT_ROOT, project.path);
-      const status = await checkProjectStatus(projectPath, projectData);
-      return { name, ...status };
+      const status = await checkProjectStatus(projectPath, projectData, name);
+
+      // ========== 新增：如果检测到端口配置，更新数据库 ==========
+      if (status.portConfig) {
+        try {
+          db.updatePortConfig(name, {
+            projectType: status.portConfig.detectedType,
+            frontendPort: status.portConfig.frontendPort,
+            backendPort: status.portConfig.backendPort
+          });
+        } catch (error) {
+          console.error(`更新项目 ${name} 的端口配置失败:`, error.message);
+        }
+      }
+
+      // 返回状态信息，包含数据库中的端口配置
+      return {
+        name,
+        ...status,
+        // 包含数据库中的端口配置（可能与实时检测不同）
+        dbPortConfig: {
+          projectType: project.project_type,
+          frontendPort: project.frontend_port,
+          backendPort: project.backend_port,
+          linkedProject: project.linked_project
+        }
+      };
     });
 
     const results = await Promise.all(statusPromises);
@@ -262,7 +302,7 @@ app.post('/api/projects/:name/action', async (req, res) => {
 // ========== 辅助函数 ==========
 
 // 检查项目状态
-async function checkProjectStatus(projectPath, project) {
+async function checkProjectStatus(projectPath, project, projectName = null) {
   const status = {
     exists: fs.existsSync(projectPath),
     hasGit: false,
@@ -270,7 +310,8 @@ async function checkProjectStatus(projectPath, project) {
     uncommittedFiles: 0,
     hasDependencies: false,
     dependenciesInstalled: false,
-    port: project.port || null
+    port: project.port || null,
+    portConfig: null  // 新增：端口配置信息
   };
 
   if (!status.exists) return status;
@@ -304,6 +345,39 @@ async function checkProjectStatus(projectPath, project) {
     status.dependenciesInstalled = fs.existsSync(path.join(projectPath, 'venv')) ||
                                    fs.existsSync(path.join(projectPath, '.venv')) ||
                                    fs.existsSync(path.join(projectPath, 'backend/venv'));
+  }
+
+  // ========== 新增：检测端口配置 ==========
+  try {
+    const framework = portService.detectFramework(projectPath);
+
+    // 从数据库获取端口配置
+    const project = db.getProjectByName(projectName);
+
+    if (project) {
+      status.portConfig = {
+        projectType: project.project_type || 'unknown',
+        frontendPort: project.frontend_port,
+        backendPort: project.backend_port,
+        framework: framework
+      };
+
+      // 判断项目类型
+      let detectedType = project.project_type || 'unknown';
+      if (!detectedType || detectedType === 'unknown') {
+        if (project.frontend_port && project.backend_port) {
+          detectedType = 'fullstack';
+        } else if (project.frontend_port) {
+          detectedType = 'frontend';
+        } else if (project.backend_port) {
+          detectedType = 'backend';
+        }
+      }
+
+      status.portConfig.detectedType = detectedType;
+    }
+  } catch (error) {
+    console.error('端口检测失败:', error.message);
   }
 
   return status;
@@ -344,6 +418,9 @@ async function executeAction(action, projectPath, project, params) {
 // 注册项目创建路由（AI 一句话创建项目）
 // ⚠️ 重要：必须在 /api/projects/:name 之前注册，避免路由冲突
 registerProjectCreationRoutes(app, PROJECT_ROOT);
+
+// 注册 AI 统计路由
+registerAIStatsRoutes(app);
 
 // ========== 项目 CRUD API ==========
 
@@ -696,6 +773,12 @@ registerManagementRoutes(app);
 
 // 注册 Todo AI 路由（任务拆分、协作、验证）
 registerTodoAiRoutes(app);
+
+// 注册端口查询路由（简化版）
+registerPortRoutes(app);
+
+// 注册 Frpc 内网穿透路由
+registerFrpcRoutes(app);
 
 // 注册项目分析路由
 registerAnalysisRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG);

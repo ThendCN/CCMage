@@ -91,7 +91,11 @@ class ProjectAnalyzer {
       port: null,
       scripts: {},
       environment_files: [],
-      config_files: []
+      config_files: [],
+      // 端口相关字段
+      project_type: 'unknown',
+      frontend_port: null,
+      backend_port: null
     };
 
     try {
@@ -112,10 +116,16 @@ class ProjectAnalyzer {
       // 读取 README 摘要
       result.readme_summary = this.extractReadmeSummary(projectPath);
 
+      // 检测项目类型和端口
+      const portInfo = this.detectPortsAndType(projectPath, result.framework);
+      result.project_type = portInfo.type;
+      result.frontend_port = portInfo.frontend_port;
+      result.backend_port = portInfo.backend_port;
+
       // 检测启动命令和脚本
       const startInfo = this.detectStartCommand(projectPath, result.framework);
       result.start_command = startInfo.command;
-      result.port = startInfo.port;
+      result.port = startInfo.port || portInfo.frontend_port || portInfo.backend_port;
       result.scripts = startInfo.scripts;
 
       // 检测配置文件
@@ -572,6 +582,119 @@ class ProjectAnalyzer {
     }
 
     return null;
+  }
+
+  /**
+   * 检测项目类型和端口配置
+   */
+  detectPortsAndType(projectPath, framework) {
+    const result = {
+      type: 'unknown',
+      frontend_port: null,
+      backend_port: null
+    };
+
+    // 检查是否是 monorepo (有 frontend/backend 子目录)
+    const hasFrontendDir = fs.existsSync(path.join(projectPath, 'frontend', 'package.json'));
+
+    // 检查后端：支持 Node.js、Python、Go、Rust
+    const hasNodeBackend = fs.existsSync(path.join(projectPath, 'backend', 'package.json'));
+    const hasPythonBackend = fs.existsSync(path.join(projectPath, 'backend', 'requirements.txt')) ||
+                            fs.existsSync(path.join(projectPath, 'backend', 'main.py')) ||
+                            fs.existsSync(path.join(projectPath, 'backend', 'app.py'));
+    const hasGoBackend = fs.existsSync(path.join(projectPath, 'backend', 'go.mod'));
+    const hasRustBackend = fs.existsSync(path.join(projectPath, 'backend', 'Cargo.toml'));
+    const hasBackendDir = hasNodeBackend || hasPythonBackend || hasGoBackend || hasRustBackend;
+
+    // 确定项目类型
+    if (hasFrontendDir && hasBackendDir) {
+      result.type = 'fullstack';
+    } else if (hasFrontendDir) {
+      result.type = 'frontend';
+    } else if (hasBackendDir) {
+      result.type = 'backend';
+    } else {
+      // 检查根目录
+      const packageJsonPath = path.join(projectPath, 'package.json');
+      if (fs.existsSync(packageJsonPath)) {
+        try {
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+
+          const hasVite = deps['vite'] || deps['@vitejs/plugin-react'];
+          const hasReact = deps['react'] || deps['react-dom'];
+          const hasVue = deps['vue'];
+          const hasExpress = deps['express'];
+          const hasKoa = deps['koa'];
+          const hasNest = deps['@nestjs/core'];
+
+          const isFrontend = hasVite || hasReact || hasVue;
+          const isBackend = hasExpress || hasKoa || hasNest;
+
+          if (isFrontend && isBackend) {
+            result.type = 'fullstack';
+          } else if (isFrontend) {
+            result.type = 'frontend';
+          } else if (isBackend) {
+            result.type = 'backend';
+          }
+        } catch (error) {
+          // 忽略
+        }
+      }
+    }
+
+    // 检测端口
+    if (result.type === 'frontend' || result.type === 'fullstack') {
+      // 检测前端端口
+      const frontendDirs = hasFrontendDir ? [path.join(projectPath, 'frontend'), projectPath] : [projectPath];
+
+      for (const dir of frontendDirs) {
+        const viteConfigPath = path.join(dir, 'vite.config.js');
+        const viteConfigTsPath = path.join(dir, 'vite.config.ts');
+        const configPath = fs.existsSync(viteConfigPath) ? viteConfigPath :
+                          fs.existsSync(viteConfigTsPath) ? viteConfigTsPath : null;
+
+        if (configPath) {
+          try {
+            const viteConfig = fs.readFileSync(configPath, 'utf8');
+            const portMatch = viteConfig.match(/port:\s*(\d+)/);
+            if (portMatch) {
+              result.frontend_port = parseInt(portMatch[1]);
+              break;
+            }
+          } catch (error) {
+            // 忽略
+          }
+        }
+      }
+    }
+
+    if (result.type === 'backend' || result.type === 'fullstack') {
+      // 检测后端端口
+      const backendDirs = hasBackendDir ? [path.join(projectPath, 'backend'), projectPath] : [projectPath];
+
+      for (const dir of backendDirs) {
+        // 检测 .env 文件
+        const envPath = path.join(dir, '.env');
+        if (fs.existsSync(envPath)) {
+          try {
+            const envContent = fs.readFileSync(envPath, 'utf8');
+            // 只匹配 PORT= 开头的，不包括 DB_PORT, SMTP_PORT 等
+            const portMatch = envContent.match(/^PORT=(\d+)/m);
+            if (portMatch) {
+              result.backend_port = parseInt(portMatch[1]);
+              break;
+            }
+          } catch (error) {
+            // 忽略
+          }
+        }
+      }
+    }
+
+    console.log(`[ProjectAnalyzer] 📊 项目类型: ${result.type}, 前端端口: ${result.frontend_port || '-'}, 后端端口: ${result.backend_port || '-'}`);
+    return result;
   }
 
   /**

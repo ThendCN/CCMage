@@ -195,7 +195,7 @@ function registerProjectCreationRoutes(app, PROJECT_ROOT) {
     const { sessionId } = req.params;
 
     // 从 sessionId 中提取引擎类型 (格式: engine-create-name-timestamp)
-    const engine = sessionId.split('-')[0];
+    const [engine] = sessionId.split('-create-');
 
     console.log(`[ProjectCreation-SSE] 📡 新的 SSE 连接: ${sessionId}`);
     console.log(`[ProjectCreation-SSE] 🤖 引擎: ${engine}`);
@@ -345,7 +345,7 @@ async function handleProjectCreationComplete(projectName, projectPath, preferenc
     // 检查项目是否确实创建成功
     if (!fs.existsSync(projectPath)) {
       console.error(`[ProjectCreation] ❌ 项目目录不存在: ${projectPath}`);
-      return;
+      throw new Error(`AI 未能创建项目目录: ${projectPath}`);
     }
 
     // 1. 自动检测项目信息

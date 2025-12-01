@@ -1,5 +1,6 @@
 const processManager = require('./processManager');
 const startupDetector = require('./startupDetector');
+const portService = require('./portService');
 const aiEngineFactory = require('./aiEngineFactory');
 const conversationManager = require('./conversationManager');
 const db = require('./database');
@@ -46,14 +47,64 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   });
 
   // 7. 启动项目服务
-  app.post('/api/projects/:name/start', (req, res) => {
+  app.post('/api/projects/:name/start', async (req, res) => {
     try {
       const { name } = req.params;
-      const { command: customCommand } = req.body;
+      const { command: customCommand, autoFixPort = true, validateStartup = true, skipLinked = false } = req.body;
       const project = db.getProjectByName(name);
 
       if (!project) {
         return res.status(404).json({ error: '项目不存在' });
+      }
+
+      // ========== 新增：检查并启动关联项目 ==========
+      let linkedProjectStarted = false;
+      if (!skipLinked && project.linked_project) {
+        const linkedProject = db.getProjectByName(project.linked_project);
+        
+        if (linkedProject) {
+          // 检查关联项目是否已经在运行
+          const linkedStatus = processManager.getStatus(project.linked_project);
+          
+          if (!linkedStatus.running) {
+            console.log(`[启动] 检测到关联项目: ${project.linked_project}，准备先启动...`);
+            
+            try {
+              // 递归启动关联项目（但跳过其关联项目，避免循环）
+              const linkedPath = path.isAbsolute(linkedProject.path)
+                ? linkedProject.path
+                : path.join(PROJECT_ROOT, linkedProject.path);
+              
+              const linkedStartup = startupDetector.detect(linkedPath, {
+                path: linkedProject.path,
+                description: linkedProject.description,
+                status: linkedProject.status,
+                port: linkedProject.port,
+                stack: linkedProject.tech ? JSON.parse(linkedProject.tech) : [],
+                startCommand: linkedProject.start_command
+              });
+              
+              if (linkedStartup) {
+                const linkedCommand = linkedStartup.command;
+                const linkedEnv = linkedProject.backend_port 
+                  ? { PORT: linkedProject.backend_port.toString() } 
+                  : {};
+                
+                processManager.start(project.linked_project, linkedCommand, linkedPath, linkedEnv);
+                console.log(`[启动] ✅ 关联项目已启动: ${project.linked_project}`);
+                linkedProjectStarted = true;
+                
+                // 等待关联项目启动完成
+                await new Promise(resolve => setTimeout(resolve, 2000));
+              }
+            } catch (linkedError) {
+              console.warn(`[启动] ⚠️  关联项目启动失败:`, linkedError.message);
+              // 继续启动主项目，不因为关联项目失败而中断
+            }
+          } else {
+            console.log(`[启动] 关联项目 ${project.linked_project} 已在运行中`);
+          }
+        }
       }
 
       // 转换数据库格式
@@ -70,7 +121,7 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
         ? project.path
         : path.join(PROJECT_ROOT, project.path);
 
-      // 确定启动命令
+      // 1. 确定启动命令
       let command = customCommand;
       if (!command) {
         const startup = startupDetector.detect(projectPath, projectData);
@@ -80,12 +131,120 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
         command = startup.command;
       }
 
-      // 启动进程
-      const result = processManager.start(name, command, projectPath);
+      // 2. 确定目标端口
+      let targetPort = null;
+      if (project.port) {
+        targetPort = project.port;
+      } else {
+        targetPort = portService.extractPortFromCommand(command);
+      }
 
+      console.log(`[启动] 目标端口: ${targetPort}`);
+
+      // 4. 检查端口是否可用
+      if (targetPort) {
+        const isAvailable = await portService.isPortAvailable(targetPort);
+
+        if (!isAvailable) {
+          const occupiedBy = await portService.findProcessByPort(targetPort);
+
+          if (autoFixPort) {
+            // 自动分配新端口
+            const newPort = await portService.findAvailablePort(targetPort);
+
+            if (!newPort) {
+              return res.status(409).json({
+                error: '端口被占用',
+                message: `端口 ${targetPort} 已被占用，且无法找到替代端口`,
+                targetPort,
+                occupiedBy
+              });
+            }
+
+            console.log(`[启动] 端口 ${targetPort} 被占用，使用新端口: ${newPort}`);
+
+            // 更新命令中的端口
+            command = portService.replacePortInCommand(command, targetPort, newPort);
+
+            // 更新数据库中的端口
+            db.updateProject(name, { port: newPort, backend_port: newPort });
+
+            // 启动进程，传递端口环境变量
+            const env = newPort ? { PORT: newPort.toString() } : {};
+            const result = processManager.start(name, command, projectPath, env);
+
+            // 如果需要启动验证
+            if (validateStartup) {
+              // 异步验证启动
+              processManager.validateStartup(name, 10000).then(validation => {
+                if (!validation.success) {
+                  console.error(`[启动] ❌ 启动验证失败:`, validation.error);
+                }
+              });
+            }
+
+            return res.json({
+              success: true,
+              message: `端口冲突已解决，使用端口 ${newPort}`,
+              oldPort: targetPort,
+              newPort,
+              configUpdated: !!project.linked_project,
+              linkedProjectStarted,
+              linkedProjectName: project.linked_project || null,
+              occupiedBy,
+              ...result
+            });
+          } else {
+            // 不自动修复，返回端口冲突提示
+            const suggestedPort = await portService.findAvailablePort(targetPort);
+
+            return res.status(409).json({
+              error: '端口被占用',
+              message: `端口 ${targetPort} 已被占用`,
+              targetPort,
+              suggestedPort,
+              occupiedBy
+            });
+          }
+        }
+      }
+
+      // 端口可用或未检测到端口，正常启动
+      const env = targetPort ? { PORT: targetPort.toString() } : {};
+      const result = processManager.start(name, command, projectPath, env);
+
+      // 如果需要启动验证
+      if (validateStartup) {
+        // 等待验证结果再返回
+        const validation = await processManager.validateStartup(name, 10000);
+
+        if (!validation.success) {
+          return res.json({
+            success: false,
+            error: '启动失败',
+            message: validation.error,
+            exitCode: validation.exitCode,
+            logs: validation.logs,
+            ...result
+          });
+        }
+
+        return res.json({
+          success: true,
+          message: validation.warning || '项目启动成功',
+          warning: validation.warning,
+          linkedProjectStarted,
+          linkedProjectName: project.linked_project || null,
+          ...result
+        });
+      }
+
+      // 不验证，立即返回
       res.json({
         success: true,
         message: '项目启动成功',
+        linkedProjectStarted,
+        linkedProjectName: project.linked_project || null,
         ...result
       });
     } catch (error) {
@@ -97,8 +256,48 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   app.post('/api/projects/:name/stop', (req, res) => {
     try {
       const { name } = req.params;
+      const { stopLinked = false } = req.body;
+      
+      // 停止主项目
       const result = processManager.stop(name);
-      res.json({ success: true, message: '项目已停止' });
+      
+      // ========== 新增：检查并停止关联项目 ==========
+      const stoppedProjects = [name];
+      
+      if (stopLinked) {
+        const project = db.getProjectByName(name);
+        
+        if (project && project.linked_project) {
+          const linkedStatus = processManager.getStatus(project.linked_project);
+          
+          if (linkedStatus.running) {
+            console.log(`[停止] 同时停止关联项目: ${project.linked_project}`);
+            processManager.stop(project.linked_project);
+            stoppedProjects.push(project.linked_project);
+          }
+        }
+        
+        // 反向检查：查找将当前项目作为关联项目的前端项目
+        const allProjects = db.getAllProjects();
+        for (const p of allProjects) {
+          if (p.linked_project === name) {
+            const frontendStatus = processManager.getStatus(p.name);
+            if (frontendStatus.running) {
+              console.log(`[停止] 同时停止依赖此项目的前端: ${p.name}`);
+              processManager.stop(p.name);
+              stoppedProjects.push(p.name);
+            }
+          }
+        }
+      }
+      
+      res.json({ 
+        success: true, 
+        message: stoppedProjects.length > 1 
+          ? `已停止 ${stoppedProjects.length} 个项目`
+          : '项目已停止',
+        stoppedProjects
+      });
     } catch (error) {
       res.status(500).json({ error: '停止项目失败', message: error.message });
     }
@@ -112,6 +311,30 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
       res.json(status);
     } catch (error) {
       res.status(500).json({ error: '获取运行状态失败', message: error.message });
+    }
+  });
+
+  // 9.5. 批量获取项目运行状态
+  app.post('/api/projects/running/batch', (req, res) => {
+    try {
+      const { projectNames } = req.body;
+
+      if (!Array.isArray(projectNames)) {
+        return res.status(400).json({ error: '请提供项目名称数组' });
+      }
+
+      const statuses = {};
+      projectNames.forEach(name => {
+        try {
+          statuses[name] = processManager.getStatus(name);
+        } catch (error) {
+          statuses[name] = { running: false, error: error.message };
+        }
+      });
+
+      res.json({ success: true, statuses });
+    } catch (error) {
+      res.status(500).json({ error: '批量获取运行状态失败', message: error.message });
     }
   });
 
@@ -155,6 +378,22 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
     }
   });
 
+  // 11.5. 获取失败日志
+  app.get('/api/projects/:name/logs/failed', (req, res) => {
+    try {
+      const { name } = req.params;
+      const failedInfo = processManager.getFailedLogs(name);
+
+      if (!failedInfo) {
+        return res.status(404).json({ error: '没有失败记录' });
+      }
+
+      res.json(failedInfo);
+    } catch (error) {
+      res.status(500).json({ error: '获取失败日志失败', message: error.message });
+    }
+  });
+
   // 12. 批量操作
   app.post('/api/projects/batch', async (req, res) => {
     try {
@@ -191,7 +430,9 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
 
             const startup = startupDetector.detect(projectPath, projectData);
             if (startup) {
-              processManager.start(name, startup.command, projectPath);
+              // 传递端口环境变量
+              const env = project.port ? { PORT: project.port.toString() } : {};
+              processManager.start(name, startup.command, projectPath, env);
               results.push({ name, success: true });
             } else {
               results.push({ name, success: false, error: '无法检测启动命令' });
@@ -220,7 +461,9 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
                 : path.join(PROJECT_ROOT, project.path);
               const startup = startupDetector.detect(projectPath, projectData);
               if (startup) {
-                processManager.start(name, startup.command, projectPath);
+                // 传递端口环境变量
+                const env = project.port ? { PORT: project.port.toString() } : {};
+                processManager.start(name, startup.command, projectPath, env);
               }
             }, 1000);
             results.push({ name, success: true });
@@ -570,6 +813,190 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
       res.json({ engine: req.params.engine, available: false, error: error.message });
     }
   });
+
+  // 23. AI 诊断启动失败的项目
+  app.post('/api/projects/:name/diagnose', async (req, res) => {
+    try {
+      const { name } = req.params;
+      const { engine = 'claude-code' } = req.body;
+
+      console.log(`[API] 🩺 收到 AI 诊断请求: ${name}`);
+
+      // 获取失败日志
+      const failedInfo = processManager.getFailedLogs(name);
+
+      if (!failedInfo) {
+        return res.status(404).json({
+          error: '没有失败记录',
+          message: '该项目没有启动失败或错误日志'
+        });
+      }
+
+      console.log(`[API] 📋 失败信息:`);
+      console.log(`[API]   - 状态: ${failedInfo.status}`);
+      console.log(`[API]   - 命令: ${failedInfo.command}`);
+      console.log(`[API]   - 错误日志数: ${failedInfo.errorLogs.length}`);
+      console.log(`[API]   - 总日志数: ${failedInfo.allLogs.length}`);
+
+      // 获取项目信息
+      const project = db.getProjectByName(name);
+      if (!project) {
+        return res.status(404).json({ error: '项目不存在' });
+      }
+
+      const projectPath = path.isAbsolute(project.path)
+        ? project.path
+        : path.join(PROJECT_ROOT, project.path);
+
+      // 构建诊断 prompt
+      const diagnosticPrompt = buildDiagnosticPrompt(failedInfo, project);
+
+      console.log(`[API] 🤖 诊断 Prompt 长度: ${diagnosticPrompt.length} 字符`);
+
+      // 生成 sessionId
+      const sessionId = `${engine}-diagnose-${name}-${Date.now()}`;
+      const conversationId = `diagnose-${name}-${Date.now()}`;
+
+      console.log(`[API] 🆔 会话 ID: ${sessionId}`);
+
+      // 保存用户消息到对话历史
+      conversationManager.addUserMessage(conversationId, engine, `诊断项目启动失败: ${name}`);
+
+      // 异步执行诊断
+      aiEngineFactory.execute(engine, name, projectPath, diagnosticPrompt, sessionId)
+        .then(result => {
+          console.log(`[API] ✅ AI 诊断完成: ${sessionId}`);
+        })
+        .catch(error => {
+          console.error(`[API] ❌ AI 诊断失败: ${sessionId}`, error);
+        });
+
+      // 监听完成事件,保存 AI 回复
+      const completeHandler = (result) => {
+        if (result.success && result.logs) {
+          const assistantMessages = result.logs
+            .filter(log => log.type === 'stdout' && log.content)
+            .map(log => log.content)
+            .join('\n\n');
+
+          if (assistantMessages) {
+            conversationManager.addAssistantMessage(conversationId, engine, assistantMessages);
+          }
+        }
+        aiEngineFactory.off(engine, `ai-complete:${sessionId}`, completeHandler);
+      };
+
+      aiEngineFactory.on(engine, `ai-complete:${sessionId}`, completeHandler);
+
+      // 立即返回会话信息
+      res.json({
+        success: true,
+        message: 'AI 诊断已启动',
+        sessionId,
+        conversationId,
+        engine,
+        failedInfo: {
+          status: failedInfo.status,
+          command: failedInfo.command,
+          errorCount: failedInfo.errorLogs.length,
+          exitCode: failedInfo.exitCode
+        }
+      });
+    } catch (error) {
+      console.error('[API] ❌ 启动 AI 诊断失败:', error);
+      res.status(500).json({ error: '启动 AI 诊断失败', message: error.message });
+    }
+  });
+}
+
+/**
+ * 构建诊断 prompt
+ */
+function buildDiagnosticPrompt(failedInfo, project) {
+  const errorLogsText = failedInfo.errorLogs
+    .map(log => `[${log.type}] ${log.content}`)
+    .join('\n');
+
+  const allLogsText = failedInfo.allLogs
+    .slice(-50)  // 最后 50 条日志
+    .map(log => `[${log.type}] ${log.content}`)
+    .join('\n');
+
+  return `# 项目启动失败诊断
+
+## 📋 项目信息
+- **项目名称**: ${failedInfo.projectName}
+- **项目路径**: ${project.path}
+- **技术栈**: ${project.tech || '未知'}
+- **启动命令**: \`${failedInfo.command}\`
+- **失败状态**: ${failedInfo.status}
+${failedInfo.exitCode !== undefined ? `- **退出码**: ${failedInfo.exitCode}` : ''}
+
+## ❌ 错误日志（${failedInfo.errorLogs.length} 条）
+
+\`\`\`
+${errorLogsText}
+\`\`\`
+
+## 📝 完整日志（最后 50 条）
+
+\`\`\`
+${allLogsText}
+\`\`\`
+
+## 🎯 诊断任务
+
+请你作为一个经验丰富的开发者,分析上述错误日志并提供诊断报告:
+
+1. **问题诊断**: 识别导致启动失败的根本原因
+2. **解决方案**: 提供具体的、可操作的修复步骤
+3. **预防措施**: 建议如何避免类似问题
+
+### 诊断要点
+- 检查是否缺少依赖包
+- 检查端口是否被占用
+- 检查配置文件是否正确
+- 检查文件权限问题
+- 检查环境变量设置
+- 检查代码语法错误
+- 检查版本兼容性问题
+
+### 输出格式
+
+请使用以下 Markdown 格式输出诊断报告:
+
+\`\`\`markdown
+## 🔍 问题诊断
+
+[描述问题的根本原因]
+
+## 💡 解决方案
+
+### 方案 1: [方案名称]
+\`\`\`bash
+# 执行步骤
+\`\`\`
+
+### 方案 2: [方案名称]（如果有备选方案）
+\`\`\`bash
+# 执行步骤
+\`\`\`
+
+## ⚠️ 注意事项
+
+[重要提示]
+
+## 🛡️ 预防措施
+
+[如何避免类似问题]
+\`\`\`
+
+**重要**:
+- 请直接给出诊断结果,不要问问题
+- 解决方案要具体可操作
+- 如果需要修改代码,请给出具体的代码片段
+- 优先考虑最常见的原因
+`;
 }
 
 module.exports = { registerProcessRoutes };

@@ -66,7 +66,7 @@ class DatabaseManager {
    */
   runMigrations() {
     const currentVersion = this.db.pragma('user_version', { simple: true });
-    const targetVersion = 1; // 当前目标版本
+    const targetVersion = 3; // 当前目标版本
 
     console.log(`📦 数据库版本: ${currentVersion} → ${targetVersion}`);
 
@@ -76,6 +76,16 @@ class DatabaseManager {
       // 迁移到版本 1: 添加项目分析字段
       if (currentVersion < 1) {
         this.migrateToV1();
+      }
+
+      // 迁移到版本 2: 添加端口管理字段
+      if (currentVersion < 2) {
+        this.migrateToV2();
+      }
+
+      // 迁移到版本 3: 添加 AI 费用追踪字段
+      if (currentVersion < 3) {
+        this.migrateToV3();
       }
 
       // 更新数据库版本
@@ -134,6 +144,92 @@ class DatabaseManager {
   }
 
   /**
+   * 迁移到版本 2: 添加端口管理相关字段
+   */
+  migrateToV2() {
+    console.log('  ➤ 迁移到版本 2: 添加端口管理字段');
+
+    try {
+      const columns = this.db.pragma('table_info(projects)');
+      const hasProjectTypeColumn = columns.some(col => col.name === 'project_type');
+
+      if (!hasProjectTypeColumn) {
+        const alterStatements = [
+          'ALTER TABLE projects ADD COLUMN project_type TEXT',
+          'ALTER TABLE projects ADD COLUMN frontend_port INTEGER',
+          'ALTER TABLE projects ADD COLUMN backend_port INTEGER',
+          'ALTER TABLE projects ADD COLUMN linked_project TEXT',
+          'ALTER TABLE projects ADD COLUMN proxy_config TEXT'
+        ];
+
+        for (const statement of alterStatements) {
+          try {
+            this.db.exec(statement);
+          } catch (err) {
+            if (!err.message.includes('duplicate column')) {
+              throw err;
+            }
+          }
+        }
+
+        console.log('  ✓ 已添加端口管理字段');
+      } else {
+        console.log('  ✓ 端口管理字段已存在,跳过迁移');
+      }
+    } catch (error) {
+      console.error('  ✗ 迁移失败:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * 迁移到版本 3: 添加 AI 费用追踪字段
+   */
+  migrateToV3() {
+    console.log('  ➤ 迁移到版本 3: 添加 AI 费用追踪字段');
+
+    try {
+      const columns = this.db.pragma('table_info(ai_sessions)');
+      const hasInputTokensColumn = columns.some(col => col.name === 'input_tokens');
+
+      if (!hasInputTokensColumn) {
+        const alterStatements = [
+          'ALTER TABLE ai_sessions ADD COLUMN engine TEXT DEFAULT "claude-code"',
+          'ALTER TABLE ai_sessions ADD COLUMN model TEXT',
+          'ALTER TABLE ai_sessions ADD COLUMN input_tokens INTEGER DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN output_tokens INTEGER DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN cache_read_tokens INTEGER DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN total_tokens INTEGER DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN input_cost REAL DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN output_cost REAL DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN cache_creation_cost REAL DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN cache_read_cost REAL DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN num_messages INTEGER DEFAULT 0',
+          'ALTER TABLE ai_sessions ADD COLUMN num_tool_calls INTEGER DEFAULT 0'
+        ];
+
+        for (const statement of alterStatements) {
+          try {
+            this.db.exec(statement);
+          } catch (err) {
+            if (!err.message.includes('duplicate column')) {
+              throw err;
+            }
+          }
+        }
+
+        console.log('  ✓ 已添加 AI 费用追踪字段');
+      } else {
+        console.log('  ✓ AI 费用追踪字段已存在,跳过迁移');
+      }
+    } catch (error) {
+      console.error('  ✗ 迁移失败:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * 关闭数据库连接
    */
   close() {
@@ -147,16 +243,33 @@ class DatabaseManager {
 
   /**
    * 同步项目配置到数据库
+   * 使用 UPSERT 语法避免触发级联删除
    */
   syncProjectsFromConfig(projectsConfig) {
-    const insert = this.db.prepare(`
-      INSERT OR REPLACE INTO projects
-      (name, path, tech, status, port, description, start_command, is_external)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    // 使用 INSERT ... ON CONFLICT DO UPDATE 避免删除已有记录
+    // 这样不会触发 CASCADE DELETE，保留关联的 todos 数据
+    const upsert = this.db.prepare(`
+      INSERT INTO projects
+      (name, path, tech, status, port, description, start_command, is_external,
+       project_type, frontend_port, backend_port, linked_project)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(name) DO UPDATE SET
+        path = excluded.path,
+        tech = excluded.tech,
+        status = excluded.status,
+        port = excluded.port,
+        description = excluded.description,
+        start_command = excluded.start_command,
+        is_external = excluded.is_external,
+        project_type = excluded.project_type,
+        frontend_port = excluded.frontend_port,
+        backend_port = excluded.backend_port,
+        linked_project = excluded.linked_project,
+        updated_at = CURRENT_TIMESTAMP
     `);
 
     const syncOne = this.db.transaction((name, project, isExternal) => {
-      insert.run(
+      upsert.run(
         name,
         project.path,
         JSON.stringify(project.tech || []),
@@ -164,7 +277,11 @@ class DatabaseManager {
         project.port || null,
         project.description || '',
         project.startCommand || null,
-        isExternal ? 1 : 0
+        isExternal ? 1 : 0,
+        project.projectType || null,
+        project.frontendPort || null,
+        project.backendPort || null,
+        project.linkedProject || null
       );
     });
 
@@ -191,6 +308,13 @@ class DatabaseManager {
    */
   getProjectByName(name) {
     return this.db.prepare('SELECT * FROM projects WHERE name = ?').get(name);
+  }
+
+  /**
+   * 根据路径获取项目
+   */
+  getProjectByPath(projectPath) {
+    return this.db.prepare('SELECT * FROM projects WHERE path = ?').get(projectPath);
   }
 
   /**
@@ -224,14 +348,33 @@ class DatabaseManager {
       }
     };
 
+    // 安全解析 JSON
+    const safeJSONParse = (value, defaultValue = []) => {
+      if (!value) return defaultValue;
+      try {
+        return JSON.parse(value);
+      } catch (e) {
+        // 如果不是 JSON，尝试按逗号分割或返回单个值
+        if (Array.isArray(defaultValue)) {
+          return typeof value === 'string' ? value.split(',').map(s => s.trim()).filter(Boolean) : [value];
+        }
+        return defaultValue;
+      }
+    };
+
     projects.forEach(p => {
       const projectData = {
         path: p.path,
         description: p.description || '',
         status: p.status,
         port: p.port || undefined,
-        stack: p.tech ? JSON.parse(p.tech) : [],
-        startCommand: p.start_command || undefined
+        stack: safeJSONParse(p.tech, []),
+        startCommand: p.start_command || undefined,
+        // 新增：端口配置
+        projectType: p.project_type || undefined,
+        frontendPort: p.frontend_port || undefined,
+        backendPort: p.backend_port || undefined,
+        linkedProject: p.linked_project || undefined
       };
 
       // 分类到 projects 或 external
@@ -259,8 +402,9 @@ class DatabaseManager {
   addProject(name, project, isExternal = false) {
     const stmt = this.db.prepare(`
       INSERT INTO projects
-      (name, path, tech, status, port, description, start_command, is_external)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (name, path, tech, status, port, description, start_command, is_external, 
+       project_type, frontend_port, backend_port, linked_project)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     return stmt.run(
@@ -271,7 +415,11 @@ class DatabaseManager {
       project.port || null,
       project.description || '',
       project.startCommand || null,
-      isExternal ? 1 : 0
+      isExternal ? 1 : 0,
+      project.projectType || null,
+      project.frontendPort || null,
+      project.backendPort || null,
+      project.linkedProject || null
     );
   }
 
@@ -288,6 +436,10 @@ class DatabaseManager {
           description = ?,
           start_command = ?,
           is_external = ?,
+          project_type = ?,
+          frontend_port = ?,
+          backend_port = ?,
+          linked_project = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE name = ?
     `);
@@ -300,6 +452,35 @@ class DatabaseManager {
       project.description || '',
       project.startCommand || null,
       isExternal ? 1 : 0,
+      project.projectType || null,
+      project.frontendPort || null,
+      project.backendPort || null,
+      project.linkedProject || null,
+      name
+    );
+  }
+
+  /**
+   * 更新项目端口配置
+   */
+  updatePortConfig(name, portConfig) {
+    const stmt = this.db.prepare(`
+      UPDATE projects
+      SET project_type = ?,
+          frontend_port = ?,
+          backend_port = ?,
+          linked_project = ?,
+          proxy_config = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE name = ?
+    `);
+
+    return stmt.run(
+      portConfig.projectType || null,
+      portConfig.frontendPort || null,
+      portConfig.backendPort || null,
+      portConfig.linkedProject || null,
+      portConfig.proxyConfig ? JSON.stringify(portConfig.proxyConfig) : null,
       name
     );
   }
@@ -309,6 +490,53 @@ class DatabaseManager {
    */
   deleteProject(name) {
     return this.db.prepare('DELETE FROM projects WHERE name = ?').run(name);
+  }
+
+  /**
+   * 从数据库获取所有已使用的端口
+   */
+  getUsedPorts() {
+    const projects = this.getAllProjects();
+    const usedPorts = new Set();
+
+    projects.forEach(p => {
+      if (p.port) usedPorts.add(p.port);
+      if (p.frontend_port) usedPorts.add(p.frontend_port);
+      if (p.backend_port) usedPorts.add(p.backend_port);
+    });
+
+    return Array.from(usedPorts).sort((a, b) => a - b);
+  }
+
+  /**
+   * 智能分配可用端口
+   * @param {string} portType - 'frontend' 或 'backend'
+   * @returns {number} 可用端口号
+   */
+  allocateAvailablePort(portType = 'frontend') {
+    const usedPorts = new Set(this.getUsedPorts());
+    
+    // 端口范围定义
+    const portRanges = {
+      frontend: { start: 3000, end: 9000, step: 1 },  // 前端常用: 3000-9000
+      backend: { start: 9000, end: 10000, step: 1 }   // 后端常用: 9000-10000
+    };
+
+    const range = portRanges[portType] || portRanges.frontend;
+
+    // 查找第一个可用端口
+    for (let port = range.start; port < range.end; port += range.step) {
+      if (!usedPorts.has(port)) {
+        return port;
+      }
+    }
+
+    // 如果范围内都被占用，继续往后找
+    let port = range.end;
+    while (usedPorts.has(port)) {
+      port++;
+    }
+    return port;
   }
 
   /**
@@ -1006,6 +1234,305 @@ class DatabaseManager {
     }
 
     return verification;
+  }
+
+  // ========== AI Sessions ==========
+
+  /**
+   * 创建 AI 会话记录
+   */
+  createAISession(data) {
+    const stmt = this.db.prepare(`
+      INSERT INTO ai_sessions (
+        session_id, project_name, todo_id, session_type, engine, model, prompt, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const result = stmt.run(
+      data.session_id,
+      data.project_name,
+      data.todo_id || null,
+      data.session_type || 'chat',
+      data.engine || 'claude-code',
+      data.model || null,
+      data.prompt,
+      'running'
+    );
+
+    return result.lastInsertRowid;
+  }
+
+  /**
+   * 更新 AI 会话状态和费用
+   */
+  updateAISession(sessionId, updates) {
+    const fields = [];
+    const values = [];
+
+    // 构建动态更新字段
+    Object.entries(updates).forEach(([key, value]) => {
+      fields.push(`${key} = ?`);
+      values.push(value);
+    });
+
+    if (fields.length === 0) return;
+
+    values.push(sessionId);
+    const stmt = this.db.prepare(`
+      UPDATE ai_sessions
+      SET ${fields.join(', ')}
+      WHERE session_id = ?
+    `);
+
+    return stmt.run(...values);
+  }
+
+  /**
+   * 获取 AI 使用统计
+   */
+  getAIStats(filters = {}) {
+    let query = 'SELECT * FROM ai_sessions WHERE 1=1';
+    const params = [];
+
+    if (filters.project_name) {
+      query += ' AND project_name = ?';
+      params.push(filters.project_name);
+    }
+
+    if (filters.engine) {
+      query += ' AND engine = ?';
+      params.push(filters.engine);
+    }
+
+    if (filters.date_from) {
+      query += ' AND started_at >= ?';
+      params.push(filters.date_from);
+    }
+
+    if (filters.date_to) {
+      query += ' AND started_at <= ?';
+      params.push(filters.date_to);
+    }
+
+    query += ' ORDER BY started_at DESC';
+
+    if (filters.limit) {
+      query += ' LIMIT ?';
+      params.push(filters.limit);
+    }
+
+    return this.db.prepare(query).all(...params);
+  }
+
+  /**
+   * 获取 AI 费用汇总
+   */
+  getAICostSummary(filters = {}) {
+    let query = `
+      SELECT
+        COUNT(*) as total_sessions,
+        SUM(input_tokens) as total_input_tokens,
+        SUM(output_tokens) as total_output_tokens,
+        SUM(total_tokens) as total_tokens,
+        SUM(total_cost_usd) as total_cost,
+        AVG(total_cost_usd) as avg_cost,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_sessions,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_sessions
+      FROM ai_sessions WHERE 1=1
+    `;
+    const params = [];
+
+    if (filters.project_name) {
+      query += ' AND project_name = ?';
+      params.push(filters.project_name);
+    }
+
+    if (filters.engine) {
+      query += ' AND engine = ?';
+      params.push(filters.engine);
+    }
+
+    if (filters.date_from) {
+      query += ' AND started_at >= ?';
+      params.push(filters.date_from);
+    }
+
+    if (filters.date_to) {
+      query += ' AND started_at <= ?';
+      params.push(filters.date_to);
+    }
+
+    return this.db.prepare(query).get(...params);
+  }
+
+  // ==================== Frpc 内网穿透配置管理 ====================
+
+  /**
+   * 获取 frps 服务器配置
+   */
+  getFrpsConfig() {
+    return this.db.prepare('SELECT * FROM frps_config LIMIT 1').get();
+  }
+
+  /**
+   * 保存或更新 frps 服务器配置
+   */
+  saveFrpsConfig(config) {
+    const existing = this.getFrpsConfig();
+
+    if (existing) {
+      return this.db.prepare(`
+        UPDATE frps_config SET
+          server_addr = ?,
+          server_port = ?,
+          auth_token = ?,
+          protocol = ?,
+          use_encryption = ?,
+          use_compression = ?,
+          tcp_mux = ?,
+          pool_count = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        config.server_addr,
+        config.server_port || 7000,
+        config.auth_token,
+        config.protocol || 'tcp',
+        config.use_encryption ? 1 : 0,
+        config.use_compression ? 1 : 0,
+        config.tcp_mux !== false ? 1 : 0,
+        config.pool_count || 1,
+        existing.id
+      );
+    } else {
+      return this.db.prepare(`
+        INSERT INTO frps_config (
+          server_addr, server_port, auth_token, protocol,
+          use_encryption, use_compression, tcp_mux, pool_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        config.server_addr,
+        config.server_port || 7000,
+        config.auth_token,
+        config.protocol || 'tcp',
+        config.use_encryption ? 1 : 0,
+        config.use_compression ? 1 : 0,
+        config.tcp_mux !== false ? 1 : 0,
+        config.pool_count || 1
+      );
+    }
+  }
+
+  /**
+   * 获取项目的 frpc 配置
+   */
+  getProjectFrpcConfig(projectName) {
+    return this.db.prepare(`
+      SELECT * FROM project_frpc_config WHERE project_name = ?
+    `).get(projectName);
+  }
+
+  /**
+   * 获取所有项目的 frpc 配置
+   */
+  getAllProjectFrpcConfigs() {
+    return this.db.prepare('SELECT * FROM project_frpc_config').all();
+  }
+
+  /**
+   * 保存或更新项目 frpc 配置
+   */
+  saveProjectFrpcConfig(projectName, config) {
+    const existing = this.getProjectFrpcConfig(projectName);
+
+    if (existing) {
+      return this.db.prepare(`
+        UPDATE project_frpc_config SET
+          enabled = ?,
+          frontend_enabled = ?,
+          frontend_subdomain = ?,
+          frontend_custom_domain = ?,
+          frontend_remote_port = ?,
+          backend_enabled = ?,
+          backend_subdomain = ?,
+          backend_custom_domain = ?,
+          backend_remote_port = ?,
+          protocol = ?,
+          use_encryption = ?,
+          use_compression = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE project_name = ?
+      `).run(
+        config.enabled ? 1 : 0,
+        config.frontend_enabled ? 1 : 0,
+        config.frontend_subdomain,
+        config.frontend_custom_domain,
+        config.frontend_remote_port,
+        config.backend_enabled ? 1 : 0,
+        config.backend_subdomain,
+        config.backend_custom_domain,
+        config.backend_remote_port,
+        config.protocol || 'http',
+        config.use_encryption ? 1 : 0,
+        config.use_compression ? 1 : 0,
+        projectName
+      );
+    } else {
+      return this.db.prepare(`
+        INSERT INTO project_frpc_config (
+          project_name, enabled,
+          frontend_enabled, frontend_subdomain, frontend_custom_domain, frontend_remote_port,
+          backend_enabled, backend_subdomain, backend_custom_domain, backend_remote_port,
+          protocol, use_encryption, use_compression
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        projectName,
+        config.enabled ? 1 : 0,
+        config.frontend_enabled ? 1 : 0,
+        config.frontend_subdomain,
+        config.frontend_custom_domain,
+        config.frontend_remote_port,
+        config.backend_enabled ? 1 : 0,
+        config.backend_subdomain,
+        config.backend_custom_domain,
+        config.backend_remote_port,
+        config.protocol || 'http',
+        config.use_encryption ? 1 : 0,
+        config.use_compression ? 1 : 0
+      );
+    }
+  }
+
+  /**
+   * 更新项目 frpc 运行状态
+   */
+  updateProjectFrpcStatus(projectName, isRunning, pid = null) {
+    return this.db.prepare(`
+      UPDATE project_frpc_config SET
+        is_running = ?,
+        pid = ?,
+        started_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE started_at END,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE project_name = ?
+    `).run(isRunning ? 1 : 0, pid, isRunning ? 1 : 0, projectName);
+  }
+
+  /**
+   * 删除项目 frpc 配置
+   */
+  deleteProjectFrpcConfig(projectName) {
+    return this.db.prepare(`
+      DELETE FROM project_frpc_config WHERE project_name = ?
+    `).run(projectName);
+  }
+
+  /**
+   * 获取所有运行中的 frpc 项目
+   */
+  getRunningFrpcProjects() {
+    return this.db.prepare(`
+      SELECT * FROM project_frpc_config WHERE is_running = 1
+    `).all();
   }
 }
 

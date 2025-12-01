@@ -12,10 +12,16 @@ CREATE TABLE IF NOT EXISTS projects (
   path TEXT NOT NULL,                  -- 项目路径
   tech TEXT,                           -- 技术栈（JSON 数组）
   status TEXT DEFAULT 'active',        -- active/production/archived
-  port INTEGER,                        -- 端口号
+  port INTEGER,                        -- 端口号（后端端口或主端口）
   description TEXT,                    -- 项目描述
   start_command TEXT,                  -- 启动命令
   is_external BOOLEAN DEFAULT 0,       -- 是否外部项目
+  -- 端口管理相关字段 (v1.2.1 新增)
+  project_type TEXT,                   -- frontend/backend/fullstack/unknown
+  frontend_port INTEGER,               -- 前端端口
+  backend_port INTEGER,                -- 后端端口
+  linked_project TEXT,                 -- 关联的项目名称（前后端互相关联）
+  proxy_config TEXT,                   -- 代理配置（JSON）
   -- 项目分析相关字段
   analyzed BOOLEAN DEFAULT 0,          -- 是否已分析
   analyzed_at DATETIME,                -- 分析时间
@@ -247,14 +253,32 @@ CREATE TABLE IF NOT EXISTS ai_sessions (
   session_id TEXT NOT NULL UNIQUE,      -- AI 会话唯一标识
   project_name TEXT NOT NULL,
   todo_id INTEGER,                      -- 关联的 todo（可选）
-  session_type TEXT NOT NULL,           -- decompose/collaborate/verify
+  session_type TEXT NOT NULL,           -- decompose/collaborate/verify/chat/create-project
+  engine TEXT DEFAULT 'claude-code',    -- AI 引擎 (claude-code/codex)
+  model TEXT,                           -- 模型名称 (claude-sonnet-4-5-20250929 等)
   prompt TEXT NOT NULL,                 -- 用户输入的提示词
   status TEXT DEFAULT 'running',        -- running/completed/failed/terminated
   started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   completed_at DATETIME,
   duration_ms INTEGER,                  -- 执行时长（毫秒）
-  total_cost_usd REAL DEFAULT 0,        -- 费用
+
+  -- Token 计数
+  input_tokens INTEGER DEFAULT 0,       -- 输入 token 数
+  output_tokens INTEGER DEFAULT 0,      -- 输出 token 数
+  cache_creation_tokens INTEGER DEFAULT 0,  -- 缓存创建 token 数
+  cache_read_tokens INTEGER DEFAULT 0,  -- 缓存读取 token 数
+  total_tokens INTEGER DEFAULT 0,       -- 总 token 数
+
+  -- 费用计算（美元）
+  input_cost REAL DEFAULT 0,            -- 输入成本
+  output_cost REAL DEFAULT 0,           -- 输出成本
+  cache_creation_cost REAL DEFAULT 0,   -- 缓存创建成本
+  cache_read_cost REAL DEFAULT 0,       -- 缓存读取成本
+  total_cost_usd REAL DEFAULT 0,        -- 总费用
+
   num_turns INTEGER DEFAULT 0,          -- 轮次
+  num_messages INTEGER DEFAULT 0,       -- 消息数
+  num_tool_calls INTEGER DEFAULT 0,     -- 工具调用次数
   result_summary TEXT,                  -- 结果摘要（JSON）
   error_message TEXT,                   -- 错误信息
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -312,3 +336,66 @@ WHEN NEW.status IN ('completed', 'failed', 'terminated') AND OLD.status = 'runni
 BEGIN
   UPDATE ai_sessions SET completed_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
+
+-- ================================================================
+-- Frpc 内网穿透配置（v1.3.0 新增）
+-- ================================================================
+
+-- 系统级 frps 服务器配置
+CREATE TABLE IF NOT EXISTS frps_config (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_addr TEXT NOT NULL,               -- frps 服务器地址（如 frp.example.com）
+  server_port INTEGER NOT NULL DEFAULT 7000, -- frps 服务器端口
+  auth_token TEXT,                         -- 认证 token
+  protocol TEXT DEFAULT 'tcp',             -- 默认协议（tcp/http/https）
+  use_encryption BOOLEAN DEFAULT 0,        -- 是否加密
+  use_compression BOOLEAN DEFAULT 0,       -- 是否压缩
+  tcp_mux BOOLEAN DEFAULT 1,               -- TCP 多路复用
+  pool_count INTEGER DEFAULT 1,            -- 连接池大小
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 项目级 frpc 配置
+CREATE TABLE IF NOT EXISTS project_frpc_config (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_name TEXT NOT NULL UNIQUE,       -- 关联项目名
+  enabled BOOLEAN DEFAULT 0,               -- 是否启用穿透
+  -- 前端穿透配置
+  frontend_enabled BOOLEAN DEFAULT 0,      -- 是否穿透前端
+  frontend_subdomain TEXT,                 -- 前端子域名（如 myapp）
+  frontend_custom_domain TEXT,             -- 前端自定义域名（可选）
+  frontend_remote_port INTEGER,           -- 远程端口（TCP 模式）
+  -- 后端穿透配置
+  backend_enabled BOOLEAN DEFAULT 0,       -- 是否穿透后端
+  backend_subdomain TEXT,                  -- 后端子域名
+  backend_custom_domain TEXT,              -- 后端自定义域名（可选）
+  backend_remote_port INTEGER,             -- 远程端口（TCP 模式）
+  -- 穿透设置
+  protocol TEXT DEFAULT 'http',            -- 协议类型（http/https/tcp）
+  use_encryption BOOLEAN DEFAULT 0,        -- 是否加密
+  use_compression BOOLEAN DEFAULT 0,       -- 是否压缩
+  -- 状态跟踪
+  is_running BOOLEAN DEFAULT 0,            -- frpc 是否运行中
+  pid INTEGER,                             -- frpc 进程 PID
+  started_at DATETIME,                     -- 启动时间
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_name) REFERENCES projects(name) ON DELETE CASCADE
+);
+
+-- frpc 访问日志（可选）
+CREATE TABLE IF NOT EXISTS frpc_access_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_name TEXT NOT NULL,
+  proxy_name TEXT NOT NULL,                -- 代理名称
+  remote_url TEXT NOT NULL,                -- 远程访问地址
+  access_count INTEGER DEFAULT 0,          -- 访问次数
+  last_access_at DATETIME,                 -- 最后访问时间
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 索引
+CREATE INDEX IF NOT EXISTS idx_project_frpc_project ON project_frpc_config(project_name);
+CREATE INDEX IF NOT EXISTS idx_project_frpc_running ON project_frpc_config(is_running);
+CREATE INDEX IF NOT EXISTS idx_frpc_logs_project ON frpc_access_logs(project_name);

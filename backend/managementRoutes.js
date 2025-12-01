@@ -569,21 +569,37 @@ function registerManagementRoutes(app) {
         return res.status(404).json({ error: '项目不存在' });
       }
 
-      // 解析 JSON 字段
+      // 安全解析 JSON 字段
+      const safeJSONParse = (value, defaultValue) => {
+        if (!value) return defaultValue;
+        try {
+          return JSON.parse(value);
+        } catch (e) {
+          // 如果不是 JSON，尝试按逗号分割或返回单个值
+          if (Array.isArray(defaultValue)) {
+            return typeof value === 'string' ? value.split(',').map(s => s.trim()).filter(Boolean) : [value];
+          }
+          return defaultValue;
+        }
+      };
+
       const analysis = {
         analyzed: Boolean(project.analyzed),
         analyzed_at: project.analyzed_at,
         analysis_status: project.analysis_status,
         analysis_error: project.analysis_error,
         framework: project.framework,
-        languages: project.languages ? JSON.parse(project.languages) : [],
-        tech: project.tech ? JSON.parse(project.tech) : [],
-        dependencies: project.dependencies ? JSON.parse(project.dependencies) : {},
+        languages: safeJSONParse(project.languages, []),
+        tech: safeJSONParse(project.tech, []),
+        dependencies: safeJSONParse(project.dependencies, {}),
         start_command: project.start_command,
         port: project.port,
+        frontend_port: project.frontend_port,
+        backend_port: project.backend_port,
+        project_type: project.project_type,
         description: project.description,
         architecture_notes: project.architecture_notes,
-        main_features: project.main_features ? JSON.parse(project.main_features) : [],
+        main_features: safeJSONParse(project.main_features, []),
         file_count: project.file_count,
         loc: project.loc
       };

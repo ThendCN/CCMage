@@ -47,23 +47,67 @@ export async function executeAction(
 }
 
 // 进程管理 API
-export async function startProject(name: string, command?: string): Promise<any> {
+export async function startProject(
+  name: string,
+  options?: {
+    command?: string;
+    autoFixPort?: boolean;
+    validateStartup?: boolean;
+  }
+): Promise<any> {
   const response = await fetch(`${API_BASE}/projects/${name}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command })
+    body: JSON.stringify({
+      command: options?.command,
+      autoFixPort: options?.autoFixPort !== false, // 默认 true
+      validateStartup: options?.validateStartup !== false // 默认 true
+    })
   });
+
+  const data = await response.json();
+
+  // 409 表示端口冲突
+  if (response.status === 409) {
+    throw {
+      type: 'PORT_CONFLICT',
+      ...data
+    };
+  }
+
+  // 其他错误
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || '启动项目失败');
+    throw {
+      type: 'ERROR',
+      message: data.error || data.message || '启动项目失败'
+    };
+  }
+
+  // 启动失败（进程验证失败）
+  if (!data.success) {
+    throw {
+      type: 'STARTUP_FAILED',
+      ...data
+    };
+  }
+
+  return data;
+}
+
+export async function getFailedLogs(name: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/projects/${name}/logs/failed`);
+  if (!response.ok) {
+    if (response.status === 404) return null;
+    throw new Error('获取失败日志失败');
   }
   return response.json();
 }
 
-export async function stopProject(name: string): Promise<any> {
+export async function stopProject(name: string, stopLinked: boolean = false): Promise<any> {
   const response = await fetch(`${API_BASE}/projects/${name}/stop`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' }
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stopLinked })
   });
   if (!response.ok) {
     const error = await response.json();
@@ -76,6 +120,22 @@ export async function getRunningStatus(name: string): Promise<any> {
   const response = await fetch(`${API_BASE}/projects/${name}/running`);
   if (!response.ok) throw new Error('获取运行状态失败');
   return response.json();
+}
+
+/**
+ * 批量获取项目运行状态
+ */
+export async function batchGetRunningStatus(projectNames: string[]): Promise<Record<string, any>> {
+  const response = await fetch(`${API_BASE}/projects/running/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectNames })
+  });
+
+  if (!response.ok) throw new Error('批量获取运行状态失败');
+
+  const data = await response.json();
+  return data.statuses;
 }
 
 export async function batchOperation(action: 'start' | 'stop' | 'restart', projectNames: string[]): Promise<any> {
@@ -315,6 +375,33 @@ export async function createDecomposedTasks(sessionId: string): Promise<any> {
 }
 
 /**
+ * AI 诊断项目启动失败
+ */
+export async function diagnoseProject(projectName: string, engine: AIEngine = 'claude-code'): Promise<{
+  success: boolean;
+  sessionId: string;
+  conversationId: string;
+  engine: string;
+  failedInfo: {
+    status: string;
+    command: string;
+    errorCount: number;
+    exitCode?: number;
+  };
+}> {
+  const response = await fetch(`${API_BASE}/projects/${projectName}/diagnose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ engine })
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || error.message || 'AI 诊断失败');
+  }
+  return response.json();
+}
+
+/**
  * 开启 AI 协作
  */
 export async function collaborateOnTask(todoId: number, message: string): Promise<any> {
@@ -461,4 +548,40 @@ export async function saveFile(
   });
   if (!response.ok) throw new Error('保存文件失败');
   return response.json();
+}
+
+
+// ========== AI 端口配置 API ==========
+
+// ========== FRPC 内网穿透 API ==========
+
+/**
+ * 获取项目的 FRPC 配置
+ */
+export async function getFrpcConfig(projectName: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/projects/${projectName}/frpc/config`);
+  if (!response.ok) {
+    // 如果项目没有配置 FRPC,返回 null 而不是抛出错误
+    if (response.status === 404) {
+      return null;
+    }
+    throw new Error('获取 FRPC 配置失败');
+  }
+  const result = await response.json();
+  return result.data || null;
+}
+
+/**
+ * 获取项目的 FRPC 运行状态
+ */
+export async function getFrpcStatus(projectName: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/projects/${projectName}/frpc/status`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { running: false };
+    }
+    throw new Error('获取 FRPC 状态失败');
+  }
+  const result = await response.json();
+  return result.data || { running: false };
 }

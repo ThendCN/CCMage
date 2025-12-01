@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, RefreshCw, ExternalLink, Info, Download, FolderOpen, Cpu, CheckCircle, XCircle } from 'lucide-react';
+import { Settings as SettingsIcon, Save, RefreshCw, ExternalLink, Info, Download, FolderOpen, Cpu, CheckCircle, XCircle, Globe, Server } from 'lucide-react';
 import { getAvailableEngines, checkEngineAvailable } from '../api';
 import type { AIEngine, AIEngineInfo } from '../types';
 
@@ -10,6 +10,17 @@ interface AppConfig {
   OPENAI_BASE_URL: string;
   DEFAULT_AI_ENGINE: AIEngine;
   PROJECT_ROOT: string;
+}
+
+interface FrpsConfig {
+  server_addr: string;
+  server_port: number;
+  auth_token: string;
+  protocol: string;
+  use_encryption: boolean;
+  use_compression: boolean;
+  tcp_mux: boolean;
+  pool_count: number;
 }
 
 export default function Settings({ onClose }: { onClose: () => void }) {
@@ -29,10 +40,22 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [availableEngines, setAvailableEngines] = useState<AIEngineInfo[]>([]);
   const [engineStatus, setEngineStatus] = useState<Record<string, boolean>>({});
   const [checkingEngines, setCheckingEngines] = useState(false);
+  const [frpsConfig, setFrpsConfig] = useState<FrpsConfig>({
+    server_addr: '',
+    server_port: 7000,
+    auth_token: '',
+    protocol: 'tcp',
+    use_encryption: false,
+    use_compression: false,
+    tcp_mux: true,
+    pool_count: 1
+  });
+  const [frpsConfigLoaded, setFrpsConfigLoaded] = useState(false);
 
   useEffect(() => {
     loadConfig();
     loadEngines();
+    loadFrpsConfig();
   }, []);
 
   const loadEngines = async () => {
@@ -91,6 +114,42 @@ export default function Settings({ onClose }: { onClose: () => void }) {
       setMessage({ type: 'error', text: '保存配置失败' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const loadFrpsConfig = async () => {
+    try {
+      const response = await fetch('http://localhost:9999/api/frps/config');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data) {
+          setFrpsConfig(data.data);
+        }
+        setFrpsConfigLoaded(true);
+      }
+    } catch (error) {
+      console.error('加载 frps 配置失败:', error);
+      setFrpsConfigLoaded(true);
+    }
+  };
+
+  const saveFrpsConfig = async () => {
+    try {
+      const response = await fetch('http://localhost:9999/api/frps/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(frpsConfig)
+      });
+
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'Frps 配置保存成功！' });
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.message || 'Frps 配置保存失败' });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: '保存 Frps 配置失败' });
     }
   };
 
@@ -599,6 +658,152 @@ export default function Settings({ onClose }: { onClose: () => void }) {
                 color: '#6b7280'
               }}>
                 项目的根目录路径，留空则使用默认路径（当前目录的上两级）
+              </div>
+            </div>
+
+            {/* Frps 服务器配置 */}
+            <div style={{
+              marginTop: '32px',
+              padding: '20px',
+              background: '#f9fafb',
+              borderRadius: '8px',
+              border: '1px solid #e5e7eb'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <Globe size={20} color="#3b82f6" />
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600' }}>Frps 服务器配置</h3>
+              </div>
+              <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '16px' }}>
+                配置 frps 服务器信息，用于内网穿透功能
+              </p>
+
+              <div style={{ display: 'grid', gap: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', fontSize: '14px' }}>
+                    服务器地址 *
+                  </label>
+                  <input
+                    type="text"
+                    value={frpsConfig.server_addr}
+                    onChange={(e) => setFrpsConfig({ ...frpsConfig, server_addr: e.target.value })}
+                    placeholder="frp.example.com"
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '6px',
+                      fontSize: '14px'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', fontSize: '14px' }}>
+                      服务器端口
+                    </label>
+                    <input
+                      type="number"
+                      value={frpsConfig.server_port}
+                      onChange={(e) => setFrpsConfig({ ...frpsConfig, server_port: parseInt(e.target.value) || 7000 })}
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '6px',
+                        fontSize: '14px'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', fontSize: '14px' }}>
+                      连接池大小
+                    </label>
+                    <input
+                      type="number"
+                      value={frpsConfig.pool_count}
+                      onChange={(e) => setFrpsConfig({ ...frpsConfig, pool_count: parseInt(e.target.value) || 1 })}
+                      min="1"
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '6px',
+                        fontSize: '14px'
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', fontSize: '14px' }}>
+                    认证 Token（可选）
+                  </label>
+                  <input
+                    type="password"
+                    value={frpsConfig.auth_token}
+                    onChange={(e) => setFrpsConfig({ ...frpsConfig, auth_token: e.target.value })}
+                    placeholder="留空表示不需要认证"
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '6px',
+                      fontSize: '14px'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={frpsConfig.use_encryption}
+                      onChange={(e) => setFrpsConfig({ ...frpsConfig, use_encryption: e.target.checked })}
+                    />
+                    <span style={{ fontSize: '14px' }}>启用加密</span>
+                  </label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={frpsConfig.use_compression}
+                      onChange={(e) => setFrpsConfig({ ...frpsConfig, use_compression: e.target.checked })}
+                    />
+                    <span style={{ fontSize: '14px' }}>启用压缩</span>
+                  </label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={frpsConfig.tcp_mux}
+                      onChange={(e) => setFrpsConfig({ ...frpsConfig, tcp_mux: e.target.checked })}
+                    />
+                    <span style={{ fontSize: '14px' }}>TCP 多路复用</span>
+                  </label>
+                </div>
+
+                <button
+                  onClick={saveFrpsConfig}
+                  style={{
+                    padding: '10px 20px',
+                    background: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <Server size={16} />
+                  保存 Frps 配置
+                </button>
               </div>
             </div>
           </div>

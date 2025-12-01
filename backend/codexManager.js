@@ -1,6 +1,8 @@
 const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
+const db = require('./database');
+const { calculateCost, extractTokenUsage } = require('./aiCostCalculator');
 
 /**
  * OpenAI Codex SDK 管理器 - 使用 Codex SDK 执行 AI 编程任务
@@ -83,6 +85,7 @@ class CodexManager extends EventEmitter {
       const thread = await codex.startThread({
         workingDirectory: projectPath,
         skipGitRepoCheck: true, // 允许非 Git 仓库
+        sandboxMode: 'danger-full-access'
       });
 
       console.log('[Codex] ✅ 线程已创建');
@@ -95,8 +98,34 @@ class CodexManager extends EventEmitter {
         startTime,
         projectName,
         projectPath,
-        prompt
+        prompt,
+        // 费用追踪
+        tokenUsage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_tokens: 0,
+          cache_read_tokens: 0
+        },
+        numMessages: 0,
+        numToolCalls: 0,
+        model: null
       });
+
+      // 创建数据库会话记录
+      try {
+        db.createAISession({
+          session_id: sessionId,
+          project_name: projectName,
+          todo_id: todoId,
+          session_type: 'chat',
+          engine: 'codex',
+          model: null,
+          prompt
+        });
+        console.log('[Codex] 💾 数据库会话记录已创建');
+      } catch (error) {
+        console.warn('[Codex] ⚠️ 创建数据库记录失败:', error.message);
+      }
 
       // 异步处理流式输出
       this.processCodexStream(thread, prompt, sessionId, logs, startTime, projectName);

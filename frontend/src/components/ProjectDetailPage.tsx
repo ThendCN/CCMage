@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
 import { X, Folder, GitBranch, Package, Code, Play, Square, FolderOpen, Bot, Activity, Search, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Project, ProjectStatus } from '../types';
-import { executeAction, startProject, stopProject, getRunningStatus, getProjectAnalysis, analyzeProject } from '../api';
+import { executeAction, startProject, stopProject, getRunningStatus, getProjectAnalysis, analyzeProject, getFrpcConfig, getFrpcStatus } from '../api';
 import AnalysisDialog from './AnalysisDialog';
 import { FileExplorer } from './FileExplorer';
 import { CodeEditor } from './CodeEditor';
 import { TodoManager } from './TodoManager';
 import LogViewer from './LogViewer';
 import AiDialog from './AiDialog';
+import AIStats from './AIStats';
+import FrpcConfigDialog from './FrpcConfigDialog';
 
 interface Props {
   name: string;
@@ -15,11 +17,12 @@ interface Props {
   status?: ProjectStatus;
   onClose: () => void;
   onRefresh: () => void;
+  onEdit?: () => void;  // 新增：编辑项目回调
 }
 
-type TabType = 'overview' | 'files' | 'todos' | 'logs' | 'ai' | 'analysis';
+type TabType = 'overview' | 'files' | 'todos' | 'logs' | 'ai' | 'analysis' | 'ai-stats';
 
-export default function ProjectDetailPage({ name, project, status, onClose, onRefresh }: Props) {
+export default function ProjectDetailPage({ name, project, status, onClose, onRefresh, onEdit }: Props) {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [runningStatus, setRunningStatus] = useState<any>(null);
   const [isStarting, setIsStarting] = useState(false);
@@ -30,6 +33,9 @@ export default function ProjectDetailPage({ name, project, status, onClose, onRe
   const [showAnalysisDialog, setShowAnalysisDialog] = useState(false);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [frpcConfig, setFrpcConfig] = useState<any>(null);
+  const [frpcStatus, setFrpcStatus] = useState<any>(null);
+  const [showFrpcDialog, setShowFrpcDialog] = useState(false);
 
   const statusColor = {
     active: '#10b981',
@@ -67,6 +73,24 @@ export default function ProjectDetailPage({ name, project, status, onClose, onRe
       }
     };
     loadAnalysis();
+  }, [name]);
+
+  // 加载 FRPC 配置
+  useEffect(() => {
+    const loadFrpcConfig = async () => {
+      try {
+        const config = await getFrpcConfig(name);
+        setFrpcConfig(config);
+        if (config && config.enabled) {
+          const status = await getFrpcStatus(name);
+          setFrpcStatus(status);
+        }
+      } catch (error) {
+        // 项目可能没有配置 FRPC
+        console.debug('加载 FRPC 配置失败:', error);
+      }
+    };
+    loadFrpcConfig();
   }, [name]);
 
   const handleAction = async (action: string) => {
@@ -158,6 +182,7 @@ export default function ProjectDetailPage({ name, project, status, onClose, onRe
     { id: 'todos', label: '任务', icon: <Code size={16} /> },
     { id: 'logs', label: '日志', icon: <Folder size={16} /> },
     { id: 'ai', label: 'AI 编程', icon: <Bot size={16} /> },
+    { id: 'ai-stats', label: 'AI 费用', icon: <Activity size={16} /> },
     { id: 'analysis', label: '项目分析', icon: <GitBranch size={16} /> },
   ] as const;
 
@@ -202,21 +227,55 @@ export default function ProjectDetailPage({ name, project, status, onClose, onRe
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              padding: '8px',
-              background: 'transparent',
-              border: 'none',
-              borderRadius: '9999px',
-              cursor: 'pointer',
-              transition: 'background 0.2s'
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'}
-            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-          >
-            <X size={24} />
-          </button>
+          
+          {/* 右侧按钮组 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* 编辑按钮 */}
+            {onEdit && (
+              <button
+                onClick={onEdit}
+                style={{
+                  padding: '8px 16px',
+                  background: '#3b82f6',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'background 0.2s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#2563eb'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#3b82f6'}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+                编辑项目
+              </button>
+            )}
+            
+            {/* 关闭按钮 */}
+            <button
+              onClick={onClose}
+              style={{
+                padding: '8px',
+                background: 'transparent',
+                border: 'none',
+                borderRadius: '9999px',
+                cursor: 'pointer',
+                transition: 'background 0.2s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              <X size={24} />
+            </button>
+          </div>
         </div>
 
         {/* Main Content */}
@@ -589,7 +648,14 @@ export default function ProjectDetailPage({ name, project, status, onClose, onRe
             {/* Tab Content */}
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {activeTab === 'overview' && (
-                <OverviewTab project={project} status={status} runningStatus={runningStatus} />
+                <OverviewTab 
+                  project={project} 
+                  status={status} 
+                  runningStatus={runningStatus}
+                  frpcConfig={frpcConfig}
+                  frpcStatus={frpcStatus}
+                  onConfigureFrpc={() => setShowFrpcDialog(true)}
+                />
               )}
               {activeTab === 'files' && (
                 <div style={{ height: '100%', display: 'flex' }}>
@@ -633,6 +699,11 @@ export default function ProjectDetailPage({ name, project, status, onClose, onRe
               {activeTab === 'ai' && (
                 <div style={{ height: '100%', position: 'relative' }}>
                   <AiDialog projectName={name} embedded />
+                </div>
+              )}
+              {activeTab === 'ai-stats' && (
+                <div style={{ height: '100%', overflowY: 'auto' }}>
+                  <AIStats projectName={name} />
                 </div>
               )}
               {activeTab === 'analysis' && (
@@ -761,11 +832,33 @@ export default function ProjectDetailPage({ name, project, status, onClose, onRe
           }}
         />
       )}
+
+      {/* FRPC Config Dialog */}
+      {showFrpcDialog && (
+        <FrpcConfigDialog
+          projectName={name}
+          onClose={() => setShowFrpcDialog(false)}
+          onSuccess={async () => {
+            setShowFrpcDialog(false);
+            // 重新加载 FRPC 配置
+            try {
+              const config = await getFrpcConfig(name);
+              setFrpcConfig(config);
+              if (config && config.enabled) {
+                const status = await getFrpcStatus(name);
+                setFrpcStatus(status);
+              }
+            } catch (error) {
+              console.error('重新加载 FRPC 配置失败:', error);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function OverviewTab({ project, status, runningStatus }: any) {
+function OverviewTab({ project, status, runningStatus, frpcConfig, frpcStatus, onConfigureFrpc }: any) {
   return (
     <div style={{ padding: '24px', overflowY: 'auto', height: '100%' }}>
       <div style={{ maxWidth: '800px' }}>
@@ -773,12 +866,16 @@ function OverviewTab({ project, status, runningStatus }: any) {
           项目概览
         </h3>
 
+        {/* 基本信息 */}
         <div style={{
           background: '#f9fafb',
           borderRadius: '8px',
           padding: '20px',
-          marginBottom: '24px'
+          marginBottom: '16px'
         }}>
+          <h4 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px', color: '#6b7280' }}>
+            基本信息
+          </h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             {status && (
               <>
@@ -788,14 +885,274 @@ function OverviewTab({ project, status, runningStatus }: any) {
                 <InfoItem label="依赖状态" value={status.dependenciesInstalled ? '已安装' : '未安装'} />
               </>
             )}
-            {project.port && (
-              <InfoItem label="端口" value={project.port.toString()} />
-            )}
             {runningStatus?.running && (
               <InfoItem label="进程状态" value="运行中" valueColor="#10b981" />
             )}
           </div>
         </div>
+
+        {/* 端口配置 */}
+        {(project.port || project.frontendPort || project.backendPort || status?.portConfig || status?.dbPortConfig) && (
+          <div style={{
+            background: '#f0f9ff',
+            border: '1px solid #bae6fd',
+            borderRadius: '8px',
+            padding: '20px',
+            marginBottom: '16px'
+          }}>
+            <h4 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px', color: '#0369a1' }}>
+              端口配置
+            </h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              {/* 显示数据库中的配置 */}
+              {status?.dbPortConfig?.projectType && (
+                <InfoItem 
+                  label="项目类型" 
+                  value={{
+                    'frontend': '纯前端',
+                    'backend': '纯后端',
+                    'fullstack': '全栈(前后端分离)',
+                    'unknown': '未知'
+                  }[status.dbPortConfig.projectType] || status.dbPortConfig.projectType}
+                />
+              )}
+              {status?.dbPortConfig?.frontendPort && (
+                <InfoItem 
+                  label="前端端口" 
+                  value={status.dbPortConfig.frontendPort.toString()}
+                  valueColor="#16a34a"
+                />
+              )}
+              {status?.dbPortConfig?.backendPort && (
+                <InfoItem 
+                  label="后端端口" 
+                  value={status.dbPortConfig.backendPort.toString()}
+                  valueColor="#2563eb"
+                />
+              )}
+              {status?.dbPortConfig?.linkedProject && (
+                <InfoItem 
+                  label="关联项目" 
+                  value={status.dbPortConfig.linkedProject}
+                  valueColor="#7c3aed"
+                />
+              )}
+              {/* 兼容旧的 port 字段 */}
+              {project.port && !status?.dbPortConfig?.frontendPort && !status?.dbPortConfig?.backendPort && (
+                <InfoItem 
+                  label="端口(旧)" 
+                  value={project.port.toString()}
+                  valueColor="#6b7280"
+                />
+              )}
+              {/* 显示实时检测的配置(如果有) */}
+              {status?.portConfig && (
+                <>
+                  {status.portConfig.detectedType && (
+                    <InfoItem 
+                      label="检测到的框架" 
+                      value={status.portConfig.detectedType}
+                      valueColor="#8b5cf6"
+                    />
+                  )}
+                  {status.portConfig.configPath && (
+                    <InfoItem 
+                      label="配置文件" 
+                      value={status.portConfig.configPath}
+                    />
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* FRPC 内网穿透配置 */}
+        {frpcConfig && frpcConfig.enabled && (
+          <div style={{
+            background: '#fef3c7',
+            border: '1px solid #fcd34d',
+            borderRadius: '8px',
+            padding: '20px',
+            marginBottom: '16px'
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '12px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h4 style={{ fontSize: '14px', fontWeight: '600', margin: 0, color: '#92400e', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="2" y1="12" x2="22" y2="12"/>
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                  </svg>
+                  内网穿透 (FRPC)
+                </h4>
+                <button
+                  onClick={onConfigureFrpc}
+                  style={{
+                    padding: '4px 12px',
+                    background: 'white',
+                    color: '#92400e',
+                    border: '1px solid #fcd34d',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#fef3c7'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M12 1v6m0 6v6M5.6 5.6l4.2 4.2m4.2 4.2l4.2 4.2M1 12h6m6 0h6M5.6 18.4l4.2-4.2m4.2-4.2l4.2-4.2"/>
+                  </svg>
+                  配置
+                </button>
+              </div>
+              {frpcStatus?.running && (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 12px',
+                  background: '#dcfce7',
+                  color: '#16a34a',
+                  borderRadius: '12px',
+                  fontSize: '12px',
+                  fontWeight: '500'
+                }}>
+                  <div style={{
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    background: '#16a34a'
+                  }} />
+                  运行中
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <InfoItem
+                label="协议"
+                value={frpcConfig.protocol || 'http'}
+              />
+              {/* TCP 模式显示端口 */}
+              {frpcConfig.protocol === 'tcp' && frpcStatus?.urls && frpcStatus.urls.length > 0 && (
+                <>
+                  {frpcStatus.urls.map((url: any, index: number) => (
+                    <InfoItem
+                      key={index}
+                      label={url.type === 'frontend' ? '前端地址' : '后端地址'}
+                      value={url.url}
+                      valueColor={url.type === 'frontend' ? '#16a34a' : '#2563eb'}
+                    />
+                  ))}
+                </>
+              )}
+              {/* HTTP/HTTPS 模式显示子域名 */}
+              {frpcConfig.protocol !== 'tcp' && frpcConfig.frontend_enabled && frpcConfig.frontend_subdomain && (
+                <InfoItem
+                  label="前端域名"
+                  value={frpcConfig.frontend_custom_domain || `${frpcConfig.frontend_subdomain}.example.com`}
+                  valueColor="#16a34a"
+                />
+              )}
+              {frpcConfig.protocol !== 'tcp' && frpcConfig.backend_enabled && frpcConfig.backend_subdomain && (
+                <InfoItem
+                  label="后端域名"
+                  value={frpcConfig.backend_custom_domain || `${frpcConfig.backend_subdomain}.example.com`}
+                  valueColor="#2563eb"
+                />
+              )}
+              {frpcConfig.use_encryption && (
+                <InfoItem
+                  label="加密"
+                  value="已启用"
+                  valueColor="#10b981"
+                />
+              )}
+              {frpcConfig.use_compression && (
+                <InfoItem
+                  label="压缩"
+                  value="已启用"
+                  valueColor="#10b981"
+                />
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* FRPC 配置入口（未启用时显示） */}
+        {!frpcConfig?.enabled && (
+          <div style={{
+            background: '#fffbeb',
+            border: '1px dashed #fcd34d',
+            borderRadius: '8px',
+            padding: '16px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '8px',
+                background: '#fef3c7',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#92400e" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="2" y1="12" x2="22" y2="12"/>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                </svg>
+              </div>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: '600', color: '#111827', marginBottom: '4px' }}>
+                  内网穿透 (FRPC)
+                </div>
+                <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                  将本地项目暴露到公网，方便远程访问和协作
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={onConfigureFrpc}
+              style={{
+                padding: '8px 16px',
+                background: '#f59e0b',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#d97706'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#f59e0b'}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="16"/>
+                <line x1="8" y1="12" x2="16" y2="12"/>
+              </svg>
+              启用 FRPC
+            </button>
+          </div>
+        )}
 
         <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: '#111827' }}>
           描述

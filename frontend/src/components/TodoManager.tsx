@@ -1233,6 +1233,7 @@ export function TodoManager({ projectName, onClose, embedded = false }: TodoMana
         {/* AI 协作对话框 */}
         {showAiDialog && (
           <AiDialog
+            key={`ai-dialog-${selectedTodoId || 'general'}`}
             projectName={projectName}
             todoId={selectedTodoId}
             initialPrompt={aiInitialPrompt}

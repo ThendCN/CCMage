@@ -1,6 +1,8 @@
 const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
+const db = require('./database');
+const { calculateCost, extractTokenUsage } = require('./aiCostCalculator');
 
 /**
  * Claude Code SDK 管理器 - 使用 Claude Agent SDK 执行 AI 编程任务
@@ -111,8 +113,34 @@ class ClaudeCodeManager extends EventEmitter {
         projectPath,
         prompt: finalPrompt,
         todoId, // 保存关联的任务 ID
-        claude_session_id: null // 将在 init 消息中获取
+        claude_session_id: null, // 将在 init 消息中获取
+        // 费用追踪
+        tokenUsage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_tokens: 0,
+          cache_read_tokens: 0
+        },
+        numMessages: 0,
+        numToolCalls: 0,
+        model: null // 将从消息中提取
       });
+
+      // 创建数据库会话记录
+      try {
+        db.createAISession({
+          session_id: sessionId,
+          project_name: projectName,
+          todo_id: todoId,
+          session_type: 'chat',
+          engine: 'claude-code',
+          model: null, // 稍后更新
+          prompt: finalPrompt
+        });
+        console.log('[AI] 💾 数据库会话记录已创建');
+      } catch (error) {
+        console.warn('[AI] ⚠️ 创建数据库记录失败:', error.message);
+      }
 
       // 异步处理消息流
       this.processQueryStream(queryInstance, sessionId, logs, startTime, projectName, prompt);
@@ -187,6 +215,7 @@ class ClaudeCodeManager extends EventEmitter {
 
       let messageCount = 0;
       let lastMessageTime = Date.now();
+      const session = this.sessions.get(sessionId);
 
       // 使用 for await...of 迭代异步生成器
       for await (const message of queryInstance) {
@@ -197,6 +226,29 @@ class ClaudeCodeManager extends EventEmitter {
         console.log(`[AI] 📨 收到第 ${messageCount} 条消息`);
         console.log(`[AI]   - 消息类型: ${message.type}`);
         console.log(`[AI]   - 距上条消息: ${timeSinceLastMessage}ms`);
+
+        // 提取并累积 token 使用情况
+        if (message.usage && session) {
+          const usage = extractTokenUsage(message);
+          session.tokenUsage.input_tokens += usage.input_tokens;
+          session.tokenUsage.output_tokens += usage.output_tokens;
+          session.tokenUsage.cache_creation_tokens += usage.cache_creation_tokens;
+          session.tokenUsage.cache_read_tokens += usage.cache_read_tokens;
+          session.numMessages++;
+
+          console.log(`[AI] 💰 Token 使用: +${usage.input_tokens} 输入, +${usage.output_tokens} 输出`);
+        }
+
+        // 提取模型信息
+        if (message.model && session && !session.model) {
+          session.model = message.model;
+          console.log(`[AI] 🤖 检测到模型: ${message.model}`);
+        }
+
+        // 统计工具调用
+        if (message.type === 'tool_use' && session) {
+          session.numToolCalls++;
+        }
 
         // 将消息转换为日志条目
         const logEntry = this.messageToLogEntry(message, sessionId);
@@ -234,6 +286,42 @@ class ClaudeCodeManager extends EventEmitter {
       console.log(`[AI]   - 总消息数: ${messageCount}`);
       console.log(`[AI]   - 执行时长: ${duration}ms`);
 
+      // 计算并更新费用到数据库
+      if (session) {
+        const costData = calculateCost(
+          session.tokenUsage,
+          'claude-code',
+          session.model
+        );
+
+        console.log(`[AI] 💰 费用计算:`);
+        console.log(`[AI]   - 总 Token: ${costData.total_tokens}`);
+        console.log(`[AI]   - 总费用: $${costData.total_cost_usd}`);
+
+        try {
+          db.updateAISession(sessionId, {
+            status: 'completed',
+            duration_ms: duration,
+            model: session.model,
+            input_tokens: costData.input_tokens,
+            output_tokens: costData.output_tokens,
+            cache_creation_tokens: costData.cache_creation_tokens,
+            cache_read_tokens: costData.cache_read_tokens,
+            total_tokens: costData.total_tokens,
+            input_cost: costData.input_cost,
+            output_cost: costData.output_cost,
+            cache_creation_cost: costData.cache_creation_cost,
+            cache_read_cost: costData.cache_read_cost,
+            total_cost_usd: costData.total_cost_usd,
+            num_messages: session.numMessages,
+            num_tool_calls: session.numToolCalls
+          });
+          console.log('[AI] 💾 数据库费用记录已更新');
+        } catch (error) {
+          console.warn('[AI] ⚠️ 更新数据库费用记录失败:', error.message);
+        }
+      }
+
       const result = {
         sessionId,
         success: true,
@@ -257,7 +345,6 @@ class ClaudeCodeManager extends EventEmitter {
       });
 
       // 如果关联了任务，保存会话记录
-      const session = this.sessions.get(sessionId);
       if (session && session.todoId) {
         try {
           const todoAiManager = require('./todoAiManager');
@@ -280,6 +367,18 @@ class ClaudeCodeManager extends EventEmitter {
 
       const endTime = Date.now();
       const duration = endTime - startTime;
+
+      // 更新数据库为失败状态
+      try {
+        db.updateAISession(sessionId, {
+          status: 'failed',
+          duration_ms: duration,
+          error_message: error.message
+        });
+        console.log('[AI] 💾 数据库失败状态已更新');
+      } catch (dbError) {
+        console.warn('[AI] ⚠️ 更新数据库失败状态失败:', dbError.message);
+      }
 
       const result = {
         sessionId,
