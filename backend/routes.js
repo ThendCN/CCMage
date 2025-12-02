@@ -485,7 +485,7 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
   app.post('/api/projects/:name/ai', async (req, res) => {
     try {
       const { name } = req.params;
-      const { prompt, engine = 'claude-code', conversationId, todoId } = req.body;
+      const { prompt, engine = 'claude-code', conversationId, todoId, thinkingMode = false } = req.body;
 
       console.log(`[API] 📬 收到 AI 任务请求`);
       console.log(`[API]   - projectName: ${name}`);
@@ -493,6 +493,7 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
       console.log(`[API]   - prompt: ${prompt}`);
       console.log(`[API]   - conversationId: ${conversationId || '(新对话)'}`);
       console.log(`[API]   - todoId: ${todoId || '(无关联任务)'}`);
+      console.log(`[API]   - thinkingMode: ${thinkingMode ? '开启' : '关闭'}`);
 
       if (!prompt || !prompt.trim()) {
         console.log('[API] ❌ 任务描述为空');
@@ -542,9 +543,9 @@ function registerProcessRoutes(app, PROJECT_ROOT, PROJECTS_CONFIG, fs) {
         console.log(`[API] ℹ️  无需附加上下文（同引擎继续或首次对话）`);
       }
 
-      // 异步执行（不等待完成），传入 todoId 参数
+      // 异步执行（不等待完成），传入 todoId 和 thinkingMode 参数
       console.log(`[API] 🚀 启动 AI 任务 (${engine})...`);
-      aiEngineFactory.execute(engine, name, projectPath, fullPrompt, sessionId, todoId)
+      aiEngineFactory.execute(engine, name, projectPath, fullPrompt, sessionId, todoId, thinkingMode)
         .then(result => {
           console.log(`[API] ✅ AI 任务完成: ${sessionId}`);
         })

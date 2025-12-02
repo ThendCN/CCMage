@@ -305,12 +305,13 @@ export async function executeAI(
   prompt: string,
   engine?: AIEngine,
   conversationId?: string | null,
-  todoId?: number | null
+  todoId?: number | null,
+  thinkingMode?: boolean
 ): Promise<any> {
   const response = await fetch(`${API_BASE}/projects/${projectName}/ai`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, engine, conversationId, todoId })
+    body: JSON.stringify({ prompt, engine, conversationId, todoId, thinkingMode })
   });
   if (!response.ok) {
     const error = await response.json();

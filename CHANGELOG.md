@@ -7,6 +7,99 @@
 
 ---
 
+## [1.3.0] - 2025-12-03
+
+### 🎉 重大更新：完整支持 DeepSeek V3.2
+
+#### ✨ Added / 新增功能
+
+**🧠 DeepSeek V3.2 AI 引擎集成**
+- ✅ **独立引擎选项** - 新增 "Claude Code - DeepSeek" 引擎，一键切换使用 DeepSeek 模型
+- ✅ **双模型支持** - 支持 DeepSeek-V3.2-Exp (通用) 和 deepseek-reasoner (思维) 模型
+- ✅ **智能配置** - 自动使用 DEEPSEEK_API_KEY，回退到 ANTHROPIC_API_KEY
+- ✅ **自动化部署** - 无需手动配置环境变量，自动设置 DeepSeek API 地址
+- ✅ **思考模式** - AI 对话中新增 "🧠 思考模式" 开关，开启深度推理能力
+- 📍 位置: AI 助手 → 引擎选择器 → "Claude Code - DeepSeek"
+
+**新增模块**
+- `deepseekManager.js` (155 行) - DeepSeek 引擎包装器
+  - 自动环境变量配置
+  - 智能模型选择（通用/思维模式）
+  - 临时环境覆盖，不影响其他引擎
+  - 详细的日志输出
+
+**🎛️ 应用配置界面增强**
+- ✅ **DeepSeek 专用配置区** - 绿色主题独立配置区域
+  - DeepSeek API Key 密码输入框
+  - DeepSeek Base URL 可选配置
+  - 使用提示和配置建议
+- ✅ **AI 模型配置** - 新增模型名称自定义输入框
+- ✅ **配置持久化** - 自动保存到 .env 文件并更新运行时环境变量
+- 📍 位置: 应用设置 → DeepSeek 专用配置
+
+#### 🔧 Changed / 改进
+
+**后端架构优化**
+- 🔄 `aiEngineFactory.js` - 扩展支持 3 个引擎：claude-code, deepseek, codex
+- 🔄 `aiManager.js` - 增强环境变量配置逻辑，支持思考模式参数
+- 🔄 `routes.js` - API 接口支持 `thinkingMode` 参数传递
+- 🔄 `server.js` - 配置 API 支持 DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, ANTHROPIC_MODEL
+
+**前端类型和组件更新**
+- 🔄 `types.ts` - AIEngine 类型扩展为 'claude-code' | 'deepseek' | 'codex'
+- 🔄 `Settings.tsx` - 新增 DeepSeek 配置表单，优化配置加载逻辑
+- 🔄 `AiDialog.tsx` - 新增思考模式开关，默认引擎改为 deepseek
+- 🔄 `api.ts` - executeAI 函数支持 thinkingMode 参数
+
+**环境配置完善**
+- 📝 `.env.example` - 新增 DeepSeek 配置说明和使用建议
+  - `DEEPSEEK_API_KEY` - DeepSeek 专用 API Key
+  - `DEEPSEEK_BASE_URL` - DeepSeek API 地址（可选）
+  - `ANTHROPIC_MODEL` - 自定义模型名称（可选）
+
+#### 🐛 Fixed / 修复
+
+- 🐛 **配置保存问题** - 修复配置保存后环境变量未更新的问题
+- 🐛 **React 警告** - 修复配置加载时的不受控组件警告
+- 🐛 **配置持久化** - 修复 DeepSeek API Key 无法持久化到 .env 文件
+- 🐛 **默认值处理** - 确保所有配置字段都有默认值，避免 undefined 错误
+
+#### 📝 Documentation / 文档
+
+- 📖 补充 DeepSeek 配置和使用文档
+- 📖 新增环境变量配置详细说明
+- 📖 提供多种配置方案示例
+- 📖 添加故障排查指南
+
+### 💡 使用建议
+
+**方式 1: 使用配置界面（推荐）**
+1. 打开应用设置 → DeepSeek 专用配置
+2. 填写 DeepSeek API Key（从 https://platform.deepseek.com/ 获取）
+3. 保存配置，系统自动写入 .env 文件
+4. 在 AI 助手中选择 "Claude Code - DeepSeek" 引擎
+5. 可选：勾选 "🧠 思考模式" 开启深度推理
+
+**方式 2: 手动配置 .env 文件**
+```bash
+# 最简配置
+DEEPSEEK_API_KEY=sk-xxxxx
+
+# 完整配置
+DEEPSEEK_API_KEY=sk-xxxxx
+DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_MODEL=DeepSeek-V3.2-Exp
+DEFAULT_AI_ENGINE=deepseek
+```
+
+### 🔗 相关资源
+
+- [DeepSeek 官网](https://www.deepseek.com/)
+- [DeepSeek API 文档](https://platform.deepseek.com/api-docs/)
+- [DeepSeek V3 技术报告](https://github.com/deepseek-ai/DeepSeek-V3)
+
+---
+
 ## [1.2.2] - 2025-12-01
 
 ### ✨ Added / 新增功能

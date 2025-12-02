@@ -3,16 +3,19 @@
  *
  * 支持的引擎:
  * - claude-code: Claude Code (使用 @anthropic-ai/claude-agent-sdk)
+ * - deepseek: DeepSeek (基于 Claude SDK，自动配置 DeepSeek API)
  * - codex: OpenAI Codex (使用 @openai/codex-sdk)
  */
 
 const claudeCodeManager = require('./aiManager');
+const deepseekManager = require('./deepseekManager');
 const codexManager = require('./codexManager');
 
 class AIEngineFactory {
   constructor() {
     this.engines = {
       'claude-code': claudeCodeManager,
+      'deepseek': deepseekManager,
       'codex': codexManager
     };
     this.defaultEngine = process.env.DEFAULT_AI_ENGINE || 'claude-code';
@@ -57,6 +60,7 @@ class AIEngineFactory {
   getEngineDisplayName(engine) {
     const displayNames = {
       'claude-code': 'Claude Code',
+      'deepseek': 'Claude Code - DeepSeek',
       'codex': 'OpenAI Codex'
     };
     return displayNames[engine] || engine;
@@ -72,6 +76,8 @@ class AIEngineFactory {
       // 根据不同的引擎调用不同的检查方法
       if (engine === 'claude-code' && manager.checkClaudeAvailable) {
         return await manager.checkClaudeAvailable();
+      } else if (engine === 'deepseek' && manager.checkDeepSeekAvailable) {
+        return await manager.checkDeepSeekAvailable();
       } else if (engine === 'codex' && manager.checkCodexAvailable) {
         return await manager.checkCodexAvailable();
       }
@@ -86,10 +92,11 @@ class AIEngineFactory {
   /**
    * 执行 AI 任务
    * @param {number} todoId - 可选，关联到特定任务
+   * @param {boolean} thinkingMode - 可选，是否开启思考模式（DeepSeek Reasoner）
    */
-  async execute(engine, projectName, projectPath, prompt, sessionId, todoId = null) {
+  async execute(engine, projectName, projectPath, prompt, sessionId, todoId = null, thinkingMode = false) {
     const manager = this.getEngine(engine);
-    return await manager.execute(projectName, projectPath, prompt, sessionId, todoId);
+    return await manager.execute(projectName, projectPath, prompt, sessionId, todoId, thinkingMode);
   }
 
   /**

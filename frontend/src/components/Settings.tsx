@@ -6,6 +6,9 @@ import type { AIEngine, AIEngineInfo } from '../types';
 interface AppConfig {
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_BASE_URL: string;
+  DEEPSEEK_API_KEY: string;
+  DEEPSEEK_BASE_URL: string;
+  ANTHROPIC_MODEL: string;
   OPENAI_API_KEY: string;
   OPENAI_BASE_URL: string;
   DEFAULT_AI_ENGINE: AIEngine;
@@ -27,9 +30,12 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   const [config, setConfig] = useState<AppConfig>({
     ANTHROPIC_API_KEY: '',
     ANTHROPIC_BASE_URL: 'https://api.husanai.com',
+    DEEPSEEK_API_KEY: '',
+    DEEPSEEK_BASE_URL: '',
+    ANTHROPIC_MODEL: '',
     OPENAI_API_KEY: '',
     OPENAI_BASE_URL: 'https://api.openai.com',
-    DEFAULT_AI_ENGINE: 'claude-code',
+    DEFAULT_AI_ENGINE: 'deepseek',  // 默认使用 DeepSeek
     PROJECT_ROOT: ''
   });
   const [loading, setLoading] = useState(true);
@@ -84,7 +90,18 @@ export default function Settings({ onClose }: { onClose: () => void }) {
       const response = await fetch('http://localhost:9999/api/config');
       if (response.ok) {
         const data = await response.json();
-        setConfig(data);
+        // 确保所有字段都有默认值，避免 undefined 导致的不受控组件警告
+        setConfig({
+          ANTHROPIC_API_KEY: data.ANTHROPIC_API_KEY || '',
+          ANTHROPIC_BASE_URL: data.ANTHROPIC_BASE_URL || 'https://api.husanai.com',
+          ANTHROPIC_MODEL: data.ANTHROPIC_MODEL || '',
+          DEEPSEEK_API_KEY: data.DEEPSEEK_API_KEY || '',
+          DEEPSEEK_BASE_URL: data.DEEPSEEK_BASE_URL || '',
+          OPENAI_API_KEY: data.OPENAI_API_KEY || '',
+          OPENAI_BASE_URL: data.OPENAI_BASE_URL || 'https://api.openai.com',
+          DEFAULT_AI_ENGINE: data.DEFAULT_AI_ENGINE || 'deepseek',
+          PROJECT_ROOT: data.PROJECT_ROOT || ''
+        });
       }
     } catch (error) {
       console.error('加载配置失败:', error);
@@ -402,6 +419,174 @@ export default function Settings({ onClose }: { onClose: () => void }) {
                 color: '#6b7280'
               }}>
                 Anthropic API 的基础 URL，默认使用虎三小破站的代理地址
+              </div>
+            </div>
+
+            {/* 模型选择 */}
+            <div>
+              <label style={{
+                display: 'block',
+                marginBottom: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                color: '#374151'
+              }}>
+                AI 模型 (可选)
+              </label>
+              <input
+                type="text"
+                value={config.ANTHROPIC_MODEL}
+                onChange={(e) => handleChange('ANTHROPIC_MODEL', e.target.value)}
+                placeholder="留空则使用默认模型"
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontFamily: 'monospace'
+                }}
+              />
+              <div style={{
+                marginTop: '8px',
+                fontSize: '13px',
+                color: '#6b7280'
+              }}>
+                指定使用的模型，例如 DeepSeek-V3.2-Exp。留空则由 SDK 自动选择
+              </div>
+            </div>
+
+            {/* DeepSeek 专用配置 */}
+            <div style={{
+              marginTop: '24px',
+              padding: '20px',
+              background: '#f0fdf4',
+              borderRadius: '8px',
+              border: '1px solid #86efac'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '6px',
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '18px'
+                }}>
+                  🧠
+                </div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#047857' }}>
+                  DeepSeek 专用配置
+                </h3>
+              </div>
+              <p style={{ fontSize: '13px', color: '#065f46', marginBottom: '16px', lineHeight: '1.6' }}>
+                配置 DeepSeek API 专用密钥。如果同时配置了 Anthropic 和 DeepSeek，系统会根据模型选择自动使用对应的 API Key。
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* DEEPSEEK_API_KEY */}
+                <div>
+                  <label style={{
+                    display: 'block',
+                    marginBottom: '6px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#047857'
+                  }}>
+                    DeepSeek API Key (可选)
+                  </label>
+                  <input
+                    type="password"
+                    value={config.DEEPSEEK_API_KEY}
+                    onChange={(e) => handleChange('DEEPSEEK_API_KEY', e.target.value)}
+                    placeholder="sk-..."
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid #86efac',
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      fontFamily: 'monospace',
+                      background: 'white'
+                    }}
+                  />
+                  <div style={{
+                    marginTop: '6px',
+                    fontSize: '12px',
+                    color: '#065f46'
+                  }}>
+                    从 <a
+                      href="https://platform.deepseek.com/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        color: '#059669',
+                        textDecoration: 'none',
+                        fontWeight: '500',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '2px'
+                      }}
+                    >
+                      platform.deepseek.com <ExternalLink size={12} />
+                    </a> 获取
+                  </div>
+                </div>
+
+                {/* DEEPSEEK_BASE_URL */}
+                <div>
+                  <label style={{
+                    display: 'block',
+                    marginBottom: '6px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#047857'
+                  }}>
+                    DeepSeek Base URL (可选)
+                  </label>
+                  <input
+                    type="text"
+                    value={config.DEEPSEEK_BASE_URL}
+                    onChange={(e) => handleChange('DEEPSEEK_BASE_URL', e.target.value)}
+                    placeholder="https://api.deepseek.com/anthropic"
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid #86efac',
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      fontFamily: 'monospace',
+                      background: 'white'
+                    }}
+                  />
+                  <div style={{
+                    marginTop: '6px',
+                    fontSize: '12px',
+                    color: '#065f46'
+                  }}>
+                    留空则使用默认地址 https://api.deepseek.com/anthropic
+                  </div>
+                </div>
+
+                <div style={{
+                  marginTop: '8px',
+                  padding: '12px',
+                  background: 'white',
+                  borderRadius: '6px',
+                  border: '1px solid #86efac',
+                  fontSize: '13px',
+                  color: '#065f46',
+                  lineHeight: '1.5'
+                }}>
+                  <strong>💡 使用提示：</strong>
+                  <ul style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
+                    <li>配置 DeepSeek API Key 后，将模型设置为 <code style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: '3px', fontFamily: 'monospace' }}>DeepSeek-V3.2-Exp</code></li>
+                    <li>在 AI 对话中勾选 "🧠 思考模式" 可自动切换到 <code style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: '3px', fontFamily: 'monospace' }}>deepseek-reasoner</code></li>
+                    <li>系统会根据模型自动选择使用 Anthropic 或 DeepSeek API Key</li>
+                  </ul>
+                </div>
               </div>
             </div>
 

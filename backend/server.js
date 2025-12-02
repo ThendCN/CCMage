@@ -47,6 +47,9 @@ app.get('/api/config', (req, res) => {
     const config = {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
       ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL || 'https://api.husanai.com',
+      ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL || '',
+      DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || '',
+      DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL || '',
       OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
       OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || 'https://api.openai.com',
       DEFAULT_AI_ENGINE: process.env.DEFAULT_AI_ENGINE || 'claude-code',
@@ -61,12 +64,31 @@ app.get('/api/config', (req, res) => {
 // 保存配置
 app.post('/api/config', (req, res) => {
   try {
-    const { ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, OPENAI_API_KEY, OPENAI_BASE_URL, DEFAULT_AI_ENGINE, PROJECT_ROOT } = req.body;
+    const {
+      ANTHROPIC_API_KEY,
+      ANTHROPIC_BASE_URL,
+      ANTHROPIC_MODEL,
+      DEEPSEEK_API_KEY,
+      DEEPSEEK_BASE_URL,
+      OPENAI_API_KEY,
+      OPENAI_BASE_URL,
+      DEFAULT_AI_ENGINE,
+      PROJECT_ROOT
+    } = req.body;
+
+    // 调试日志
+    console.log('[Config] 📥 收到保存配置请求:');
+    console.log('[Config]   - ANTHROPIC_MODEL:', ANTHROPIC_MODEL);
+    console.log('[Config]   - DEEPSEEK_API_KEY:', DEEPSEEK_API_KEY ? '已提供' : '未提供');
+    console.log('[Config]   - DEEPSEEK_BASE_URL:', DEEPSEEK_BASE_URL);
 
     // 读取现有的 .env 文件或创建新的
     let envContent = '';
     if (fs.existsSync(ENV_FILE)) {
       envContent = fs.readFileSync(ENV_FILE, 'utf8');
+      console.log('[Config] 📖 读取现有 .env 文件');
+    } else {
+      console.log('[Config] ✨ 创建新的 .env 文件');
     }
 
     // 解析现有配置
@@ -90,6 +112,15 @@ app.post('/api/config', (req, res) => {
     if (ANTHROPIC_BASE_URL !== undefined) {
       envMap.set('ANTHROPIC_BASE_URL', ANTHROPIC_BASE_URL);
     }
+    if (ANTHROPIC_MODEL !== undefined) {
+      envMap.set('ANTHROPIC_MODEL', ANTHROPIC_MODEL);
+    }
+    if (DEEPSEEK_API_KEY !== undefined) {
+      envMap.set('DEEPSEEK_API_KEY', DEEPSEEK_API_KEY);
+    }
+    if (DEEPSEEK_BASE_URL !== undefined) {
+      envMap.set('DEEPSEEK_BASE_URL', DEEPSEEK_BASE_URL);
+    }
     if (OPENAI_API_KEY !== undefined) {
       envMap.set('OPENAI_API_KEY', OPENAI_API_KEY);
     }
@@ -111,6 +142,11 @@ app.post('/api/config', (req, res) => {
       '# Claude API Configuration',
       `ANTHROPIC_API_KEY=${envMap.get('ANTHROPIC_API_KEY') || ''}`,
       `ANTHROPIC_BASE_URL=${envMap.get('ANTHROPIC_BASE_URL') || 'https://api.husanai.com'}`,
+      `ANTHROPIC_MODEL=${envMap.get('ANTHROPIC_MODEL') || ''}`,
+      '',
+      '# DeepSeek API Configuration',
+      `DEEPSEEK_API_KEY=${envMap.get('DEEPSEEK_API_KEY') || ''}`,
+      `DEEPSEEK_BASE_URL=${envMap.get('DEEPSEEK_BASE_URL') || ''}`,
       '',
       '# OpenAI API Configuration',
       `OPENAI_API_KEY=${envMap.get('OPENAI_API_KEY') || ''}`,
@@ -132,10 +168,18 @@ app.post('/api/config', (req, res) => {
     // 更新环境变量
     process.env.ANTHROPIC_API_KEY = envMap.get('ANTHROPIC_API_KEY') || '';
     process.env.ANTHROPIC_BASE_URL = envMap.get('ANTHROPIC_BASE_URL') || 'https://api.husanai.com';
+    process.env.ANTHROPIC_MODEL = envMap.get('ANTHROPIC_MODEL') || '';
+    process.env.DEEPSEEK_API_KEY = envMap.get('DEEPSEEK_API_KEY') || '';
+    process.env.DEEPSEEK_BASE_URL = envMap.get('DEEPSEEK_BASE_URL') || '';
     process.env.OPENAI_API_KEY = envMap.get('OPENAI_API_KEY') || '';
     process.env.OPENAI_BASE_URL = envMap.get('OPENAI_BASE_URL') || 'https://api.openai.com';
     process.env.DEFAULT_AI_ENGINE = envMap.get('DEFAULT_AI_ENGINE') || 'claude-code';
     process.env.PROJECT_ROOT = envMap.get('PROJECT_ROOT') || '';
+
+    console.log('[Config] ✅ 配置已保存并更新到环境变量');
+    console.log('[Config]   - DEEPSEEK_API_KEY:', process.env.DEEPSEEK_API_KEY ? '已设置' : '未设置');
+    console.log('[Config]   - DEEPSEEK_BASE_URL:', process.env.DEEPSEEK_BASE_URL || '(使用默认)');
+    console.log('[Config]   - ANTHROPIC_MODEL:', process.env.ANTHROPIC_MODEL || '(使用默认)');
 
     res.json({ success: true, message: '配置保存成功' });
   } catch (error) {

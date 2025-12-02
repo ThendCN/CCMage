@@ -53,8 +53,9 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null); // 当前引擎的会话 ID
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
-  const [selectedEngine, setSelectedEngine] = useState<AIEngine>('claude-code');
+  const [selectedEngine, setSelectedEngine] = useState<AIEngine>('deepseek');
   const [availableEngines, setAvailableEngines] = useState<AIEngineInfo[]>([]);
+  const [thinkingMode, setThinkingMode] = useState(false); // 思考模式开关
   const [currentTodo, setCurrentTodo] = useState<Todo | null>(null); // 当前关联的任务
   const outputRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -297,8 +298,8 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
     setPrompt('');  // 立即清空输入框
 
     try {
-      // 启动 AI 任务，传递 conversationId 和 todoId（如果有）
-      const result = await executeAI(projectName, currentPrompt, selectedEngine, conversationId, todoId || null);
+      // 启动 AI 任务，传递 conversationId、todoId 和 thinkingMode
+      const result = await executeAI(projectName, currentPrompt, selectedEngine, conversationId, todoId || null, thinkingMode);
 
       // 更新对话 ID 和会话 ID
       const newConversationId = result.conversationId;
@@ -650,6 +651,37 @@ export default function AiDialog({ projectName, onClose, todoId, initialPrompt, 
                 ))}
               </select>
             </div>
+
+            {/* 思考模式开关 */}
+            <label style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 12px',
+              background: thinkingMode ? '#dbeafe' : '#f3f4f6',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '500',
+              color: thinkingMode ? '#1e40af' : '#6b7280',
+              transition: 'all 0.2s',
+              userSelect: 'none'
+            }}
+            title="开启后使用 deepseek-reasoner 模型（仅支持 DeepSeek API）"
+            >
+              <input
+                type="checkbox"
+                checked={thinkingMode}
+                onChange={(e) => setThinkingMode(e.target.checked)}
+                disabled={isRunning}
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  cursor: isRunning ? 'not-allowed' : 'pointer'
+                }}
+              />
+              <span>🧠 思考模式</span>
+            </label>
           </div>
 
           <div style={{ display: 'flex', gap: '8px' }}>

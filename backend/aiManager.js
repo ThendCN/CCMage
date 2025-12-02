@@ -41,13 +41,15 @@ class ClaudeCodeManager extends EventEmitter {
    * 执行 Claude Code 任务（使用 SDK）
    * @param {string} sessionId - 如果提供已存在的 sessionId，将复用现有会话继续对话
    * @param {number} todoId - 可选，关联到特定任务，自动添加任务上下文
+   * @param {boolean} thinkingMode - 可选，是否开启思考模式（DeepSeek Reasoner）
    */
-  async execute(projectName, projectPath, prompt, sessionId, todoId = null) {
+  async execute(projectName, projectPath, prompt, sessionId, todoId = null, thinkingMode = false) {
     console.log(`[AI] 🚀 开始执行 AI 任务 (SDK 模式)`);
     console.log(`[AI]   - sessionId: ${sessionId || '(新会话)'}`);
     console.log(`[AI]   - projectName: ${projectName}`);
     console.log(`[AI]   - projectPath: ${projectPath}`);
     console.log(`[AI]   - todoId: ${todoId || '(无关联任务)'}`);
+    console.log(`[AI]   - thinkingMode: ${thinkingMode ? '开启' : '关闭'}`);
     console.log(`[AI]   - prompt: ${prompt}`);
 
     // 如果有关联任务，添加任务上下文
@@ -69,7 +71,7 @@ class ClaudeCodeManager extends EventEmitter {
     if (existingSession && existingSession.claude_session_id) {
       console.log(`[AI] 🔄 复用现有会话 (resume): ${existingSession.claude_session_id}`);
       // 在现有会话上继续对话
-      return await this.continueConversation(existingSession, finalPrompt, sessionId, projectPath);
+      return await this.continueConversation(existingSession, finalPrompt, sessionId, projectPath, thinkingMode);
     }
 
     // 创建新会话
@@ -85,6 +87,49 @@ class ClaudeCodeManager extends EventEmitter {
       const sdk = await this.loadSDK();
       console.log('[AI] ✅ SDK 模块已加载');
 
+      // 准备环境变量 - 支持思考模式和 DeepSeek API Key
+      const queryEnv = { ...process.env };
+
+      // 检测是否使用 DeepSeek
+      const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+      const currentModel = process.env.ANTHROPIC_MODEL || '';
+      const isUsingDeepSeek = baseUrl.includes('deepseek') || currentModel.toLowerCase().includes('deepseek');
+
+      // 如果使用 DeepSeek 且配置了专用配置，优先使用
+      if (isUsingDeepSeek) {
+        // 优先使用 DEEPSEEK_API_KEY
+        if (process.env.DEEPSEEK_API_KEY) {
+          queryEnv.ANTHROPIC_API_KEY = process.env.DEEPSEEK_API_KEY;
+          console.log('[AI] 🔑 使用 DeepSeek API Key');
+        } else {
+          console.log('[AI] ⚠️ 检测到使用 DeepSeek，但未配置 DEEPSEEK_API_KEY，将使用 ANTHROPIC_API_KEY');
+        }
+
+        // 优先使用 DEEPSEEK_BASE_URL
+        if (process.env.DEEPSEEK_BASE_URL) {
+          queryEnv.ANTHROPIC_BASE_URL = process.env.DEEPSEEK_BASE_URL;
+          console.log(`[AI] 🌐 使用 DeepSeek Base URL: ${process.env.DEEPSEEK_BASE_URL}`);
+        } else if (!queryEnv.ANTHROPIC_BASE_URL.includes('deepseek')) {
+          // 如果没有配置 DEEPSEEK_BASE_URL，且当前 BASE_URL 不包含 deepseek
+          // 则使用默认的 DeepSeek API 地址
+          queryEnv.ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
+          console.log('[AI] 🌐 使用默认 DeepSeek Base URL: https://api.deepseek.com/anthropic');
+        }
+      }
+
+      // 如果开启思考模式且当前使用 DeepSeek，切换到 reasoner 模型
+      if (thinkingMode) {
+        if (isUsingDeepSeek) {
+          queryEnv.ANTHROPIC_MODEL = 'deepseek-reasoner';
+          console.log('[AI] 🧠 已启用 DeepSeek 思维模式: deepseek-reasoner');
+        } else {
+          console.log('[AI] ⚠️ 思考模式仅支持 DeepSeek，当前环境未使用 DeepSeek API');
+        }
+      } else if (process.env.ANTHROPIC_MODEL) {
+        // 使用环境变量中配置的模型
+        console.log(`[AI] 🤖 使用配置的模型: ${process.env.ANTHROPIC_MODEL}`);
+      }
+
       // 创建 query
       console.log('[AI] 📝 创建 query 实例...');
       const queryInstance = sdk.query({
@@ -96,7 +141,7 @@ class ClaudeCodeManager extends EventEmitter {
             type: 'preset',
             preset: 'claude_code'
           },
-          env: { ...process.env },
+          env: queryEnv,  // 使用准备好的环境变量
           maxTurns: 50, // 最大轮次限制
         }
       });
@@ -161,8 +206,9 @@ class ClaudeCodeManager extends EventEmitter {
   /**
    * 在现有会话上继续对话
    */
-  async continueConversation(session, prompt, sessionId, projectPath) {
+  async continueConversation(session, prompt, sessionId, projectPath, thinkingMode = false) {
     console.log(`[AI] 💬 在现有会话上继续对话 (resume): ${session.claude_session_id}`);
+    console.log(`[AI]   - thinkingMode: ${thinkingMode ? '开启' : '关闭'}`);
 
     const startTime = Date.now();
     session.prompt = prompt; // 更新最新的 prompt
@@ -170,6 +216,46 @@ class ClaudeCodeManager extends EventEmitter {
     try {
       // 加载 SDK
       const sdk = await this.loadSDK();
+
+      // 准备环境变量 - 支持思考模式和 DeepSeek API Key
+      const queryEnv = { ...process.env };
+
+      // 检测是否使用 DeepSeek
+      const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+      const currentModel = process.env.ANTHROPIC_MODEL || '';
+      const isUsingDeepSeek = baseUrl.includes('deepseek') || currentModel.toLowerCase().includes('deepseek');
+
+      // 如果使用 DeepSeek 且配置了专用配置，优先使用
+      if (isUsingDeepSeek) {
+        // 优先使用 DEEPSEEK_API_KEY
+        if (process.env.DEEPSEEK_API_KEY) {
+          queryEnv.ANTHROPIC_API_KEY = process.env.DEEPSEEK_API_KEY;
+          console.log('[AI] 🔑 使用 DeepSeek API Key');
+        } else {
+          console.log('[AI] ⚠️ 检测到使用 DeepSeek，但未配置 DEEPSEEK_API_KEY，将使用 ANTHROPIC_API_KEY');
+        }
+
+        // 优先使用 DEEPSEEK_BASE_URL
+        if (process.env.DEEPSEEK_BASE_URL) {
+          queryEnv.ANTHROPIC_BASE_URL = process.env.DEEPSEEK_BASE_URL;
+          console.log(`[AI] 🌐 使用 DeepSeek Base URL: ${process.env.DEEPSEEK_BASE_URL}`);
+        } else if (!queryEnv.ANTHROPIC_BASE_URL.includes('deepseek')) {
+          // 如果没有配置 DEEPSEEK_BASE_URL，且当前 BASE_URL 不包含 deepseek
+          // 则使用默认的 DeepSeek API 地址
+          queryEnv.ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
+          console.log('[AI] 🌐 使用默认 DeepSeek Base URL: https://api.deepseek.com/anthropic');
+        }
+      }
+
+      // 如果开启思考模式且当前使用 DeepSeek，切换到 reasoner 模型
+      if (thinkingMode) {
+        if (isUsingDeepSeek) {
+          queryEnv.ANTHROPIC_MODEL = 'deepseek-reasoner';
+          console.log('[AI] 🧠 已启用 DeepSeek 思维模式: deepseek-reasoner');
+        } else {
+          console.log('[AI] ⚠️ 思考模式仅支持 DeepSeek，当前环境未使用 DeepSeek API');
+        }
+      }
 
       // 使用 resume 选项创建新的 query
       const queryInstance = sdk.query({
@@ -182,7 +268,7 @@ class ClaudeCodeManager extends EventEmitter {
             type: 'preset',
             preset: 'claude_code'
           },
-          env: { ...process.env },
+          env: queryEnv,  // 使用准备好的环境变量
           maxTurns: 50,
         }
       });

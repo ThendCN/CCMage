@@ -214,7 +214,7 @@ export interface ProjectAnalysis {
 
 // ========== AI 引擎类型 ==========
 
-export type AIEngine = 'claude-code' | 'codex';
+export type AIEngine = 'claude-code' | 'deepseek' | 'codex';
 
 export interface AIEngineInfo {
   name: AIEngine;
